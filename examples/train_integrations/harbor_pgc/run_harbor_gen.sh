@@ -9,6 +9,14 @@ fi
 : "${E2B_API_KEY:?E2B_API_KEY must be set (in $DEFAULT_PGC_ENV_FILE or shell)}"
 # Optional: WANDB_API_KEY also gets sourced; logger=console below if unset
 
+# Override the stale CUDA_HOME from research/pgc_swe/.env (which points at a
+# nonexistent /usr/local/cuda-12.9). Fall back to the symlink (currently 13.2
+# on our box). causal-conv1d's setup.py needs nvcc at this path to build;
+# CUDA 13 toolkit + PyTorch cu128 wheels work fine in practice.
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
 # Pin GPUs (default 4,5,6,7 — GPU 0 is usually taken by panmz/prelude on this box)
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 
