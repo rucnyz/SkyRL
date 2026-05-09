@@ -61,6 +61,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   generator.inference_engine.gpu_memory_utilization=0.8 \
   generator.inference_engine.engine_init_kwargs.chat_template=$CHAT_TEMPLATE_PATH \
   trainer.algorithm.advantage_estimator="grpo" \
+  generator.step_wise_trajectories=true \
   trainer.placement.colocate_all=false \
   trainer.placement.policy_num_gpus_per_node=$NUM_GPUS \
   trainer.placement.ref_num_gpus_per_node=$NUM_GPUS \
