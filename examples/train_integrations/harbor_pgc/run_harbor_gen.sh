@@ -20,6 +20,12 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 # Pin GPUs (default 4,5,6,7 — GPU 0 is sometimes taken by panmz/prelude on this box)
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 
+# NOTE on http_endpoint_port=28000 below: docker-proxy on this box squats
+# 8000 and returns 401 for any request. SkyRL's router detects the collision
+# and bumps the actual server to a free port, but HarborGenerator's base_url
+# is built from the *configured* port, so terminus-2 -> LiteLLM ends up
+# hitting the foreign 401 service. Pick a port outside 8xxx to be safe.
+
 # Prepare dataset first (downloads from HuggingFace and extracts tasks):
 # uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
 
@@ -50,11 +56,14 @@ SERVED_NAME="Qwen3.5-9B"
 # `--with "harbor[e2b]"` adds the e2b SDK on top of the project's harbor[daytona,modal]
 # extras. Without this, harbor.environments.e2b raises ImportError on `from e2b import ...`.
 #
-# Note: we run on the new inference path (default _SKYRL_USE_NEW_INFERENCE=1).
-# Our HarborGenerator reads the runtime ``proxy_url`` off the RemoteInferenceClient
-# instead of the static config port, so the foreign-squatter-on-8000 problem
-# that bit the legacy path no longer applies. See harbor_generator.py:__init__.
-uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor_generate \
+# `_SKYRL_USE_NEW_INFERENCE=0` forces the legacy InferenceEngineClient path —
+# the only one that actually opens an OpenAI-compatible HTTP endpoint at
+# (http_endpoint_host, http_endpoint_port). The default new-inference path
+# (rebased upstream) replaces that with a vllm_router on a random port and
+# never binds the configured port, so harbor's terminus-2 -> LiteLLM ends up
+# hitting whatever else is squatting it (docker-proxy on this box). Upstream's
+# harbor training scripts (run_codecontest*.sh) set the same flag.
+_SKYRL_USE_NEW_INFERENCE=0 uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor_generate \
   data.train_data=$TRAIN_DATA \
   data.val_data=$TRAIN_DATA \
   harbor_trial_config.trials_dir=$TRIALS_DIR \
@@ -68,7 +77,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   generator.inference_engine.tensor_parallel_size=1 \
   generator.inference_engine.enable_http_endpoint=true \
   generator.inference_engine.http_endpoint_host="127.0.0.1" \
-  generator.inference_engine.http_endpoint_port=8000 \
+  generator.inference_engine.http_endpoint_port=28000 \
   generator.sampling_params.max_generate_length=16384 \
   trainer.algorithm.max_seq_len=$MAX_MODEL_LEN \
   generator.inference_engine.engine_init_kwargs.max_model_len=$MAX_MODEL_LEN \
