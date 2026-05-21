@@ -9,7 +9,7 @@ from skyrl.train.generators.utils import get_rollout_metrics
 from skyrl.backends.skyrl_train.inference_engines.base import ConversationType
 from skyrl.train.utils.rate_limiter import create_rate_limiter
 from tqdm import tqdm
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from harbor.trial.trial import Trial
 from harbor.models.trial.config import TrialConfig
 from harbor.models.agent.rollout_detail import RolloutDetail
@@ -237,7 +237,13 @@ class HarborGenerator(GeneratorInterface):
                 "may result in much slower training."
             )
 
-        self._harbor_trial_config_template = deepcopy(harbor_cfg)
+        # Convert to a plain (struct-free) dict so we can add fields the yaml
+        # schema doesn't declare (e.g. agent.import_path). Leaving it as a
+        # struct-locked DictConfig silently drops writes to unknown keys.
+        self._harbor_trial_config_template = OmegaConf.to_container(
+            harbor_cfg, resolve=True
+        )
+        assert isinstance(self._harbor_trial_config_template, dict)
 
         # Set model_name and route the agent to our SkyRL native backend.
         assert ie_cfg.served_model_name is not None, "served_model_name must be set"

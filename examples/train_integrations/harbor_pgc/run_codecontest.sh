@@ -61,8 +61,11 @@ ENABLE_RATE_LIMITING=true  # Enable rate/concurrency limiting for trajectory sub
 TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fractional values like 1.5 are supported). null or omit to disable rate limiting
 MAX_CONCURRENCY=512        # Maximum concurrent trial.run() calls allowed (must be >= 1). null or omit to disable concurrency limiting
 
-# Run SkyRL command
-_SKYRL_USE_NEW_INFERENCE=0 uv run --isolated --extra fsdp --extra harbor -m examples.train_integrations.harbor.entrypoints.main_harbor \
+# Run SkyRL command — drops the upstream-recipe `_SKYRL_USE_NEW_INFERENCE=0`
+# legacy pin and switches entrypoint to our harbor_pgc/ module. We talk to
+# vllm-router via the SkyRLTerminus2 + SkyRLNativeLLM extension (see
+# run_harbor_gen.sh comment for the full rationale).
+uv run --isolated --extra fsdp --extra harbor -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor \
   data.train_data=$TRAIN_DATA \
   data.val_data=$EVAL_DATA \
   trainer.policy.model.path=Qwen/Qwen3-8B \
