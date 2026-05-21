@@ -37,15 +37,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, ClassVar
 
+import httpx
 from e2b import AsyncTemplate, Template
 from e2b.exceptions import SandboxException
 
 from harbor.environments.e2b import E2BEnvironment
 from harbor.models.trial.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
+
+_E2B_API_BASE = "https://api.e2b.app"
 
 # Backoff schedule (seconds) for retrying super().start() when the freshly-built
 # template's ``default`` tag is registered server-side but the underlying image
@@ -115,6 +119,63 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
         # stays under e2b's name length cap and is filesystem-safe.
         image_hash = hashlib.sha256(docker_image.encode()).hexdigest()[:12]
         self._template_name = f"pgc-shared-{image_hash}"
+
+    async def _reap_zombie_by_env_name(self) -> int:
+        """List E2B sandboxes and DELETE any whose metadata.environment_name
+        matches this trial's. Catches the case where ``POST /sandboxes``
+        returned a 5xx / connection drop AFTER the sandbox was created
+        server-side — in that path the SDK never produces a sandbox object, so
+        ``trial.stop()`` can't kill it, and it sits on the 100-account quota
+        for its ``inactivity_timeout``. Best-effort: never raises.
+        """
+        api_key = os.environ.get("E2B_API_KEY")
+        if not api_key:
+            return 0
+        killed = 0
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{_E2B_API_BASE}/sandboxes",
+                    headers={"X-API-Key": api_key},
+                )
+                if resp.status_code != 200:
+                    return 0
+                for sbx in resp.json():
+                    meta = sbx.get("metadata") or {}
+                    if meta.get("environment_name") != self.environment_name:
+                        continue
+                    sid = sbx.get("sandboxID")
+                    if not sid:
+                        continue
+                    try:
+                        await client.delete(
+                            f"{_E2B_API_BASE}/sandboxes/{sid}",
+                            headers={"X-API-Key": api_key},
+                        )
+                        killed += 1
+                    except Exception:  # noqa: BLE001 — reaper is best-effort
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(f"Zombie reaper for {self.environment_name} failed: {exc}")
+        if killed:
+            self.logger.warning(
+                f"Reaped {killed} zombie e2b sandbox(es) for env "
+                f"{self.environment_name} (sandbox.create dropped mid-flight)."
+            )
+        return killed
+
+    async def _create_sandbox(self) -> None:
+        """Wrap upstream sandbox.create so a mid-flight HTTP failure (the
+        SDK never returns a sandbox object even though e2b already started
+        provisioning one) doesn't leak a sandbox on the account quota.
+        """
+        try:
+            await super()._create_sandbox()
+        except Exception:
+            # Re-raise after firing the reaper so the trial's retry logic
+            # still gets to see the original exception.
+            await self._reap_zombie_by_env_name()
+            raise
 
     async def _create_template(self) -> None:
         """Always build from the public registry image, ignoring any

@@ -78,12 +78,11 @@ NUM_INFERENCE_ENGINES=4
 TP_SIZE=1
 ENABLE_RATE_LIMITING=true  # Enable rate/concurrency limiting for trajectory submissions
 TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fractional values like 1.5 are supported).
-# E2B account hard-caps concurrent sandboxes at 100. But the real binding
-# constraint is the httpcore HTTP/2 connection pool in the e2b SDK — above
-# ~32 concurrent trials, the pool degrades (CLOSED-state SEND_HEADERS errors)
-# and trials fail mid-loop faster than the 2-attempt retry can absorb. 32
-# concurrent keeps the pool healthy with margin to spare.
-MAX_CONCURRENCY=32
+# E2B account hard-caps concurrent sandboxes at 100. With
+# SharedTemplateE2BEnvironment._create_sandbox reaping zombie sandboxes from
+# mid-flight HTTP failures (see environments/skyrl_e2b.py), the effective
+# steady-state ceiling stays at MAX_CONCURRENCY without zombie inflation.
+MAX_CONCURRENCY=64
 
 # Run SkyRL command — talks to vllm-router on the new inference path via
 # SkyRLTerminus2 + SkyRLNativeLLM (see harbor_pgc/README.md).

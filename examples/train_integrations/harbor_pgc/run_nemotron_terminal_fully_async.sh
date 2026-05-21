@@ -78,11 +78,10 @@ TP_SIZE=1
 NUM_POLICY_GPUS=2
 ENABLE_RATE_LIMITING=true
 TRAJECTORIES_PER_SECOND=5
-# E2B SDK's httpcore HTTP/2 connection pool degrades above ~32 concurrent
-# trials (CLOSED-state SEND_HEADERS errors flood mid-loop and overwhelm the
-# 2-attempt retry). 32 is the binding limit; well below the account's 100-
-# sandbox cap.
-MAX_CONCURRENCY=32
+# 64 concurrent trials with the zombie reaper in
+# SharedTemplateE2BEnvironment._create_sandbox (see environments/skyrl_e2b.py)
+# so we stay within the e2b 100-sandbox account cap.
+MAX_CONCURRENCY=64
 
 # Run SkyRL command — talks to vllm-router on the new inference path via
 # SkyRLTerminus2 + SkyRLNativeLLM (see harbor_pgc/README.md).
