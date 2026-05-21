@@ -10,9 +10,9 @@ fi
 # Optional: WANDB_API_KEY also gets sourced; logger=console below if unset
 
 # Override the stale CUDA_HOME from research/pgc_swe/.env (which points at a
-# nonexistent /usr/local/cuda-12.9). Fall back to the symlink (currently 13.2
-# on our box). causal-conv1d's setup.py needs nvcc at this path to build;
-# CUDA 13 toolkit + PyTorch cu128 wheels work fine in practice.
+# nonexistent /usr/local/cuda-12.9). Box has CUDA 13.2 toolkit; upstream's
+# pinned wheel URLs (erictang000 forks, torch 2.11, cp312) ship prebuilt so
+# no source build (and no nvcc check) at install time.
 export CUDA_HOME=/usr/local/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
@@ -33,10 +33,19 @@ TRIALS_DIR="$HOME/trials_run"
 # Infrastructure setup
 #----------------
 NUM_GPUS=4
-MAX_MODEL_LEN=8192
+MAX_MODEL_LEN=262144   # Qwen3.5-9B native max_position_embeddings (256K, no rope scaling).
+                       # B300 has 288 GB; mostly-linear-attn means small KV footprint.
 ENABLE_RATE_LIMITING=true  # Enable rate/concurrency limiting for trajectory submissions
 TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fractional values like 1.5 are supported). null or omit to disable rate limiting
 MAX_CONCURRENCY=512        # Maximum concurrent trial.run() calls allowed (must be >= 1). null or omit to disable concurrency limiting
+
+# Qwen3.5 = multimodal architecture (Qwen3_5ForConditionalGeneration). For
+# text-only RL we set language_model_only=true on all three workers so they
+# instantiate the text submodel. GDN/linear-attention layers + sample packing
+# have a known bug (HF transformers#44910, QwenLM/Qwen3.5#104), so we disable
+# sample packing too.
+MODEL_NAME="Qwen/Qwen3.5-9B"
+SERVED_NAME="Qwen3.5-9B"
 
 # `--with "harbor[e2b]"` adds the e2b SDK on top of the project's harbor[daytona,modal]
 # extras. Without this, harbor.environments.e2b raises ImportError on `from e2b import ...`.
@@ -44,14 +53,18 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   data.train_data=$TRAIN_DATA \
   data.val_data=$TRAIN_DATA \
   harbor_trial_config.trials_dir=$TRIALS_DIR \
-  trainer.policy.model.path="Qwen/Qwen3-8B" \
-  generator.inference_engine.served_model_name="Qwen3-8B" \
+  trainer.policy.model.path="$MODEL_NAME" \
+  trainer.policy.language_model_only=true \
+  trainer.ref.language_model_only=true \
+  trainer.use_sample_packing=false \
+  generator.inference_engine.served_model_name="$SERVED_NAME" \
+  generator.inference_engine.language_model_only=true \
   generator.inference_engine.num_engines=$NUM_GPUS \
   generator.inference_engine.tensor_parallel_size=1 \
   generator.inference_engine.enable_http_endpoint=true \
   generator.inference_engine.http_endpoint_host="127.0.0.1" \
   generator.inference_engine.http_endpoint_port=8000 \
-  generator.sampling_params.max_generate_length=4096 \
+  generator.sampling_params.max_generate_length=16384 \
   trainer.algorithm.max_seq_len=$MAX_MODEL_LEN \
   generator.inference_engine.engine_init_kwargs.max_model_len=$MAX_MODEL_LEN \
   generator.inference_engine.backend=vllm \
