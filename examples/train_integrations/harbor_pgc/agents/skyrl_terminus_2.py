@@ -5,8 +5,8 @@ Loaded through harbor's official extension point — set
 in the trial config and harbor's factory imports + instantiates this class
 instead of stock Terminus2. No monkey-patching.
 
-The only behavioural change vs upstream Terminus2 is ``_initialize_llm_backend``:
-when ``llm_backend == "skyrl"`` we return a ``SkyRLNativeLLM`` that talks
+The only behavioural change vs upstream Terminus2 is ``_init_llm``: when
+``llm_backend == "skyrl"`` we return a ``SkyRLNativeLLM`` that talks
 ``/skyrl/v1/generate`` (preserves vllm's prompt/completion_token_ids and
 logprobs, which the OpenAI /v1/chat/completions path on vllm-router drops).
 """
@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from harbor.agents.terminus_2.terminus_2 import Terminus2
+from harbor.llms.base import BaseLLM
 
 from ..llms.skyrl_native_llm import SkyRLNativeLLM
 
@@ -23,34 +24,34 @@ from ..llms.skyrl_native_llm import SkyRLNativeLLM
 class SkyRLTerminus2(Terminus2):
     """Terminus-2 wired to talk SkyRL's vllm-router native generate endpoint."""
 
-    @staticmethod
-    def _initialize_llm_backend(
+    def _init_llm(
+        self,
         llm_backend,
-        model_name,
-        temperature,
-        collect_rollout_details,
-        api_base,
-        session_id,
-        max_thinking_tokens,
-        reasoning_effort,
-        model_info,
-        use_responses_api,
-        llm_kwargs,
-    ):
+        model_name: str,
+        temperature: float,
+        collect_rollout_details: bool,
+        llm_kwargs: dict | None,
+        api_base: str | None,
+        session_id: str | None,
+        max_thinking_tokens: int | None,
+        reasoning_effort: str | None,
+        model_info: dict | None,
+        use_responses_api: bool,
+    ) -> BaseLLM:
         backend_value = llm_backend.value if hasattr(llm_backend, "value") else llm_backend
         if backend_value != "skyrl":
-            return Terminus2._initialize_llm_backend(
-                llm_backend,
-                model_name,
-                temperature,
-                collect_rollout_details,
-                api_base,
-                session_id,
-                max_thinking_tokens,
-                reasoning_effort,
-                model_info,
-                use_responses_api,
-                llm_kwargs,
+            return super()._init_llm(
+                llm_backend=llm_backend,
+                model_name=model_name,
+                temperature=temperature,
+                collect_rollout_details=collect_rollout_details,
+                llm_kwargs=llm_kwargs,
+                api_base=api_base,
+                session_id=session_id,
+                max_thinking_tokens=max_thinking_tokens,
+                reasoning_effort=reasoning_effort,
+                model_info=model_info,
+                use_responses_api=use_responses_api,
             )
 
         extra: dict[str, Any] = dict(llm_kwargs or {})
