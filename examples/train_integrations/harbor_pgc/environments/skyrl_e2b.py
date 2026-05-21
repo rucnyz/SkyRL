@@ -35,9 +35,10 @@ point:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from e2b import AsyncTemplate, Template
 
@@ -55,6 +56,24 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
     # Matches the WORKDIR + ``COPY files/ /app/`` contract baked into every
     # original Nemotron Dockerfile we strip out at image-build time.
     _PER_TRIAL_FILES_TARGET = "/app"
+
+    # Serialize template build across concurrent trials that share the same
+    # alias. Without this, N trials all see alias_exists=False, all POST a
+    # build, only one wins alias registration (rest 403), and trials racing
+    # past on the winning alias hit "tag 'default' does not exist" because
+    # the actual image push hasn't finished. The lock collapses N concurrent
+    # builds into 1 build + (N-1) cache hits.
+    _TEMPLATE_BUILD_LOCKS: ClassVar[dict[str, asyncio.Lock]] = {}
+    _TEMPLATE_BUILD_LOCKS_MUTEX: ClassVar[asyncio.Lock] = asyncio.Lock()
+
+    @classmethod
+    async def _get_template_lock(cls, name: str) -> asyncio.Lock:
+        async with cls._TEMPLATE_BUILD_LOCKS_MUTEX:
+            lock = cls._TEMPLATE_BUILD_LOCKS.get(name)
+            if lock is None:
+                lock = asyncio.Lock()
+                cls._TEMPLATE_BUILD_LOCKS[name] = lock
+            return lock
 
     def __init__(
         self,
@@ -109,7 +128,18 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
         runtime replacement for the ``COPY files/ /app/`` line we stripped
         from the pre-built image.
         """
-        await super().start(force_build=force_build)
+        # Per-template lock collapses concurrent builds into one.
+        lock = await self._get_template_lock(self._template_name)
+        async with lock:
+            if force_build or not await self._does_template_exist():
+                self.logger.debug(f"Building shared template {self._template_name}")
+                await self._create_template()
+
+        # Template exists + is fully built (AsyncTemplate.build waits for
+        # completion). super().start() will _does_template_exist → True and
+        # skip the redundant build, then proceed with _create_sandbox + dir
+        # bootstrap.
+        await super().start(force_build=False)
 
         files_dir = self.environment_dir / "files"
         if files_dir.is_dir() and any(files_dir.iterdir()):
