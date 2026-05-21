@@ -128,6 +128,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   trainer.algorithm.max_seq_len=$MAX_MODEL_LEN \
   trainer.policy.optimizer_config.lr=1.0e-6 \
   generator.step_wise_trajectories=true \
+  generator.sampling_params.max_generate_length=16384 \
   generator.merge_stepwise_output=true \
   generator.n_samples_per_prompt=$N_SAMPLES_PER_PROMPT \
   generator.eval_n_samples_per_prompt=2 \
