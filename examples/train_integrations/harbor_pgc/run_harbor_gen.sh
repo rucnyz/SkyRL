@@ -17,8 +17,14 @@ export CUDA_HOME=/usr/local/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 
-# Pin GPUs (default 4,5,6,7 — GPU 0 is usually taken by panmz/prelude on this box)
+# Pin GPUs (default 4,5,6,7 — GPU 0 is sometimes taken by panmz/prelude on this box)
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
+
+# NOTE on http_endpoint_port=28000 below: docker-proxy on this box squats
+# 8000 and returns 401 for any request. SkyRL's router detects the collision
+# and bumps the actual server to a free port, but HarborGenerator's base_url
+# is built from the *configured* port, so terminus-2 -> LiteLLM ends up
+# hitting the foreign 401 service. Pick a port outside 8xxx to be safe.
 
 # Prepare dataset first (downloads from HuggingFace and extracts tasks):
 # uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
@@ -63,7 +69,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   generator.inference_engine.tensor_parallel_size=1 \
   generator.inference_engine.enable_http_endpoint=true \
   generator.inference_engine.http_endpoint_host="127.0.0.1" \
-  generator.inference_engine.http_endpoint_port=8000 \
+  generator.inference_engine.http_endpoint_port=28000 \
   generator.sampling_params.max_generate_length=16384 \
   trainer.algorithm.max_seq_len=$MAX_MODEL_LEN \
   generator.inference_engine.engine_init_kwargs.max_model_len=$MAX_MODEL_LEN \
