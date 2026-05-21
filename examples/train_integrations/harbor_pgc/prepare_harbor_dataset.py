@@ -1,8 +1,17 @@
 """
 Prepare Harbor task datasets from HuggingFace Hub.
 
-Downloads a dataset and extracts Harbor tasks from parquet files containing
-tar-archived task directories (columns: path, task_binary).
+Handles three on-Hub layouts:
+
+  1. Parquet shards with ``path`` + ``task_binary`` columns (e.g.
+     ``nvidia/Nemotron-Terminal-Corpus``). Extracted via ``extract_parquet``.
+
+  2. ``.tar.gz`` shards each containing per-task directories (e.g.
+     ``nvidia/Nemotron-Terminal-Synthetic-Tasks`` — ``mixed/<skill>.tar.gz``,
+     ``easy.tar.gz``, ``medium_shard*.tar.gz``). Extracted via
+     ``extract_tarballs``, flattening task dirs into ``output_dir/<task_name>/``.
+
+  3. Loose task directories on the snapshot. Symlinked.
 
 Output directory defaults to ``data/<repo-name>`` next to this script
 (i.e. ``examples/train_integrations/harbor_pgc/data/<repo-name>``). Land
@@ -13,6 +22,10 @@ Usage:
 
     uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \\
         --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks
+
+    # Only extract the mixed/ shard (default for run_nemotron_terminal*.sh).
+    uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \\
+        --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks --shards mixed
 """
 
 import argparse
@@ -107,7 +120,102 @@ def extract_parquet(parquet_path: Path, output_dir: Path) -> int:
     return sum(results)
 
 
-def prepare(dataset_name: str, output_dir: str | None = None) -> str:
+def _shard_matches(rel_path: Path, shards: list[str] | None) -> bool:
+    if not shards:
+        return True
+    rel_str = rel_path.as_posix()
+    return any(s in rel_str for s in shards)
+
+
+def _normalize_parts(name: str) -> tuple[str, ...]:
+    return tuple(p for p in PurePosixPath(name).parts if p not in ("", "."))
+
+
+def extract_tarballs(
+    snapshot_dir: Path,
+    output_dir: Path,
+    shards: list[str] | None = None,
+) -> int:
+    """Extract ``.tar.gz`` shards into ``output_dir/<task_name>/``.
+
+    Task roots are identified by the presence of ``task.toml`` (every Harbor
+    task ships one). The whole task subtree is then materialised under
+    ``output_dir/<task_name>/`` regardless of how deep the shard nests it
+    (``./<skill>/<task>/`` in ``mixed/`` vs ``./easy_5000/<skill>/<task>/`` in
+    ``easy.tar.gz``).
+
+    Idempotent: tasks whose ``instruction.md`` is already on disk are skipped.
+    """
+    tarballs = sorted(snapshot_dir.glob("**/*.tar.gz"))
+    if shards:
+        tarballs = [t for t in tarballs if _shard_matches(t.relative_to(snapshot_dir), shards)]
+    if not tarballs:
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    total = 0
+    for tb in tarballs:
+        rel = tb.relative_to(snapshot_dir)
+        print(f"Extracting {rel}...")
+        extracted_in_shard = 0
+        with tarfile.open(tb, mode="r:*") as tf:
+            members = tf.getmembers()
+            # Identify task roots by presence of task.toml. Map: full
+            # in-tarball task dir path → its members.
+            task_root_to_name: dict[tuple[str, ...], str] = {}
+            for m in members:
+                parts = _normalize_parts(m.name)
+                if parts and parts[-1] == "task.toml" and len(parts) >= 2:
+                    task_root_to_name[parts[:-1]] = parts[-2]
+
+            if not task_root_to_name:
+                continue
+
+            # Bucket every member under its containing task root (if any).
+            by_root: dict[tuple[str, ...], list] = {root: [] for root in task_root_to_name}
+            for m in members:
+                parts = _normalize_parts(m.name)
+                for root in task_root_to_name:
+                    if len(parts) > len(root) and parts[: len(root)] == root:
+                        by_root[root].append(m)
+                        break
+
+            for root, members_in_task in by_root.items():
+                task_name = task_root_to_name[root]
+                target_dir = output_dir / task_name
+                if (target_dir / "instruction.md").exists():
+                    continue  # already extracted (idempotency)
+                target_dir.mkdir(parents=True, exist_ok=True)
+                for m in members_in_task:
+                    parts = _normalize_parts(m.name)
+                    inside = parts[len(root) :]
+                    if not inside or ".snapshot" in inside:
+                        continue
+                    target = (target_dir / Path(*inside)).resolve()
+                    if not _is_within(target_dir, target):
+                        continue
+                    if m.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if not m.isfile():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with tf.extractfile(m) as src:
+                        if src is None:
+                            continue
+                        with open(target, "wb") as dst:
+                            dst.write(src.read())
+                extracted_in_shard += 1
+        print(f"  extracted {extracted_in_shard} tasks from {rel.name}")
+        total += extracted_in_shard
+    return total
+
+
+def prepare(
+    dataset_name: str,
+    output_dir: str | None = None,
+    shards: list[str] | None = None,
+) -> str:
     from huggingface_hub import snapshot_download
 
     repo_name = dataset_name.split("/")[-1] if "/" in dataset_name else dataset_name
@@ -133,9 +241,19 @@ def prepare(dataset_name: str, output_dir: str | None = None) -> str:
             continue
 
     if not parquets:
-        # No parquet files — dataset already contains task directories directly.
-        # Just symlink to the snapshot.
-        print("No parquet files found, symlinking snapshot directly...")
+        # No parquet — try .tar.gz shards (Nemotron-Terminal-Synthetic-Tasks).
+        tarballs = list(snapshot_dir.glob("**/*.tar.gz"))
+        if tarballs:
+            # Detach any prior symlink at output_path before extracting into it.
+            if output_path.is_symlink():
+                output_path.unlink()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            total = extract_tarballs(snapshot_dir, output_path, shards=shards)
+            print(f"Done! {total} tasks extracted to {output_path}")
+            return str(output_path)
+
+        # Last-resort fallback: dataset already has loose task dirs; symlink.
+        print("No parquet/tar.gz shards found, symlinking snapshot directly...")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if output_path.is_symlink():
             output_path.unlink()
@@ -156,7 +274,14 @@ def prepare(dataset_name: str, output_dir: str | None = None) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare Harbor task dataset from HuggingFace Hub")
-    parser.add_argument("--dataset", required=True, help="HuggingFace dataset (e.g. open-thoughts/CodeContests)")
-    parser.add_argument("--output_dir", default=None, help="Output directory (default: ~/data/harbor/<repo-name>)")
+    parser.add_argument("--dataset", required=True, help="HuggingFace dataset (e.g. nvidia/Nemotron-Terminal-Synthetic-Tasks)")
+    parser.add_argument("--output_dir", default=None, help="Output directory (default: data/<repo-name> next to this script)")
+    parser.add_argument(
+        "--shards",
+        nargs="+",
+        default=None,
+        help="For tar.gz datasets, only extract tarballs whose relative path "
+        "contains one of these substrings (e.g. ``mixed``, ``easy``, ``medium``).",
+    )
     args = parser.parse_args()
-    prepare(args.dataset, args.output_dir)
+    prepare(args.dataset, args.output_dir, shards=args.shards)

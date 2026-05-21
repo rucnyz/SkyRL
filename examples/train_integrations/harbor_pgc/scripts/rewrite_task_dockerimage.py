@@ -52,7 +52,20 @@ _SKILL_HINTS = {
 
 
 def _skill_for(task_toml: Path) -> str | None:
-    """Walk up the path looking for a known skill directory name."""
+    """Infer the skill from the path.
+
+    Two layouts in play:
+      - flat (post-``prepare_harbor_dataset.py`` extraction): the immediate
+        parent dir is named ``<skill>_task_NNNN``, e.g.
+        ``data_processing_task_0001``. Strip the ``_task_*`` suffix.
+      - nested (raw tarball after ``tar -xzf``): an ancestor directory itself
+        is the skill name (``data_processing``).
+    """
+    parent_name = task_toml.parent.name
+    if "_task_" in parent_name:
+        candidate = parent_name.rsplit("_task_", 1)[0]
+        if candidate in _SKILL_HINTS:
+            return candidate
     for parent in task_toml.parents:
         if parent.name in _SKILL_HINTS:
             return parent.name
