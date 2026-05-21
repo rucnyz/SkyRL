@@ -37,6 +37,9 @@ class HarborGenerateExp(BasePPOExp):
             inference_engine_client=inference_engine_client,
             tokenizer=tokenizer,
             max_seq_len=cfg.trainer.algorithm.max_seq_len,
+            # The SkyRL-native harbor backend needs the HF model path to load
+            # the matching chat-template tokenizer client-side.
+            model_path=cfg.trainer.policy.model.path,
         )
 
     def _setup_generator(self):

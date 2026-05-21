@@ -1,12 +1,11 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 from loguru import logger
 from uuid import uuid4
 from skyrl.train.generators.base import GeneratorInterface, GeneratorInput, GeneratorOutput, TrajectoryID
 from skyrl.train.generators.utils import get_rollout_metrics
-from skyrl.backends.skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl.backends.skyrl_train.inference_engines.base import ConversationType
 from skyrl.train.utils.rate_limiter import create_rate_limiter
 from tqdm import tqdm
@@ -15,14 +14,13 @@ from harbor.trial.trial import Trial
 from harbor.models.trial.config import TrialConfig
 from harbor.models.agent.rollout_detail import RolloutDetail
 
-# Suppress LiteLLM verbose logging
-
-import litellm
 import logging
 
-litellm.suppress_debug_info = True  # Suppress the "Provider List" output
-litellm.set_verbose = False
-logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+# Harbor extension point: importable agent class fed to AgentConfig.import_path.
+# Keeping this constant in one place so future renames stay in sync.
+SKYRL_AGENT_IMPORT_PATH = (
+    "examples.train_integrations.harbor_pgc.agents.skyrl_terminus_2:SkyRLTerminus2"
+)
 
 # We have N retries for each trial, if one of the rollout (out of n_samples_per_prompt) fails
 # after N attemptes, we skip this prompt altogether.
@@ -189,23 +187,45 @@ class HarborGenerator(GeneratorInterface):
         self,
         generator_cfg: DictConfig,
         harbor_cfg: DictConfig,
-        inference_engine_client: InferenceEngineClient,
+        inference_engine_client: Any,
         tokenizer,
         max_seq_len: int,
+        model_path: Optional[str] = None,
     ):
         """
         Args:
             generator_cfg: DictConfig object containing the generator configuration
             harbor_cfg: DictConfig object containing the Harbor configuration
-            inference_engine_client: InferenceEngineClient object for interacting with the inference engines
+            inference_engine_client: SkyRL inference client. On the new inference
+                path this is a ``RemoteInferenceClient`` whose ``proxy_url`` we
+                hand to the SkyRL-native harbor backend.
             tokenizer: tokenizer object for encoding and decoding text
             max_seq_len: Maximum total sequence length (prompt + response). Used to truncate responses.
+            model_path: HF model path forwarded to harbor agents so the SkyRL
+                native backend can load the matching chat-template tokenizer.
+                Falls back to ``inference_engine_client.model_name`` when omitted.
         """
         ie_cfg = generator_cfg.inference_engine
-        self.base_url = f"http://{ie_cfg.http_endpoint_host}:{ie_cfg.http_endpoint_port}"
+        proxy_url = getattr(inference_engine_client, "proxy_url", None)
+        if not proxy_url:
+            raise RuntimeError(
+                "HarborGenerator requires the new inference path "
+                "(_SKYRL_USE_NEW_INFERENCE=1 default) so the SkyRL-native "
+                "backend can hit the vllm-router /skyrl/v1/generate endpoint. "
+                "RemoteInferenceClient did not expose a proxy_url."
+            )
+        self.proxy_url = proxy_url
         self.generator_cfg = generator_cfg
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self._tokenizer_path = model_path or getattr(
+            inference_engine_client, "model_name", None
+        )
+        if not self._tokenizer_path:
+            raise RuntimeError(
+                "HarborGenerator could not resolve a tokenizer path; pass "
+                "model_path=trainer.policy.model.path through main_harbor_generate.py."
+            )
 
         if not getattr(generator_cfg, "step_wise_trajectories", False):
             raise ValueError(
@@ -219,15 +239,28 @@ class HarborGenerator(GeneratorInterface):
 
         self._harbor_trial_config_template = deepcopy(harbor_cfg)
 
-        # Set model_name and api_base once (constant across all trials)
+        # Set model_name and route the agent to our SkyRL native backend.
         assert ie_cfg.served_model_name is not None, "served_model_name must be set"
         assert (
             "/" not in ie_cfg.served_model_name
         ), "served_model_name must not contain '/', Harbor expects hosted_vllm/{model_name}"
-        self._harbor_trial_config_template.setdefault("agent", {})[
-            "model_name"
-        ] = f"hosted_vllm/{ie_cfg.served_model_name}"
-        self._harbor_trial_config_template["agent"].setdefault("kwargs", {})["api_base"] = f"{self.base_url}/v1"
+        agent = self._harbor_trial_config_template.setdefault("agent", {})
+        # Route the trial to our SkyRLTerminus2 subclass via harbor's official
+        # extension point. Clearing `name` so harbor's factory falls through to
+        # the import_path branch (instead of resolving the built-in terminus-2).
+        agent["name"] = None
+        agent["import_path"] = SKYRL_AGENT_IMPORT_PATH
+        agent["model_name"] = f"hosted_vllm/{ie_cfg.served_model_name}"
+        agent_kwargs = agent.setdefault("kwargs", {})
+        agent_kwargs["llm_backend"] = "skyrl"
+        # api_base is unused under the skyrl backend but harbor still threads
+        # it through agent construction; keep a syntactically-valid placeholder.
+        agent_kwargs["api_base"] = f"{self.proxy_url}/v1"
+        # SkyRL-native backend wiring (SkyRLTerminus2._initialize_llm_backend
+        # pops these off llm_kwargs and forwards to SkyRLNativeLLM.__init__).
+        skyrl_llm_kwargs = agent_kwargs.setdefault("llm_kwargs", {})
+        skyrl_llm_kwargs["proxy_url"] = self.proxy_url
+        skyrl_llm_kwargs["tokenizer_path"] = self._tokenizer_path
 
         # Step-wise needs per-turn token IDs and logprobs from vLLM via Harbor.
         agent_kwargs = self._harbor_trial_config_template["agent"]["kwargs"]
