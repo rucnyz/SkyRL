@@ -197,12 +197,26 @@ class HarborGenerator(GeneratorInterface):
         Args:
             generator_cfg: DictConfig object containing the generator configuration
             harbor_cfg: DictConfig object containing the Harbor configuration
-            inference_engine_client: InferenceEngineClient object for interacting with the inference engines
+            inference_engine_client: Inference client. With ``_SKYRL_USE_NEW_INFERENCE=1``
+                (upstream default) this is a ``RemoteInferenceClient`` whose
+                ``proxy_url`` points at the live vllm-router. Otherwise it's the
+                legacy ``InferenceEngineClient`` that spins up its own
+                OpenAI-compatible HTTP endpoint at (http_endpoint_host,
+                http_endpoint_port).
             tokenizer: tokenizer object for encoding and decoding text
             max_seq_len: Maximum total sequence length (prompt + response). Used to truncate responses.
         """
         ie_cfg = generator_cfg.inference_engine
-        self.base_url = f"http://{ie_cfg.http_endpoint_host}:{ie_cfg.http_endpoint_port}"
+        # Prefer the runtime ``proxy_url`` exposed by RemoteInferenceClient (new
+        # inference path). The configured (http_endpoint_host, http_endpoint_port)
+        # is meaningless under the new path — vllm-router picks a random free port
+        # at startup, and the legacy ``_spin_up_http_endpoint`` that would bind
+        # the configured port is no longer called.
+        proxy_url = getattr(inference_engine_client, "proxy_url", None)
+        if proxy_url:
+            self.base_url = proxy_url
+        else:
+            self.base_url = f"http://{ie_cfg.http_endpoint_host}:{ie_cfg.http_endpoint_port}"
         self.generator_cfg = generator_cfg
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
