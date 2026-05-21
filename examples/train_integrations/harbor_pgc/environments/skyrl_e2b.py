@@ -41,10 +41,18 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from e2b import AsyncTemplate, Template
+from e2b.exceptions import SandboxException
 
 from harbor.environments.e2b import E2BEnvironment
 from harbor.models.trial.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
+
+# Backoff schedule (seconds) for retrying super().start() when the freshly-built
+# template's ``default`` tag is registered server-side but the underlying image
+# push is still propagating. Observed propagation gap with first-time builds of
+# the 11 Nemotron skill base images is ~10-30s; the long tail covers worst-case
+# e2b backend latency without blocking the trial indefinitely.
+_TAG_READY_BACKOFFS = (2, 4, 8, 16, 30, 60, 60)
 
 
 class SharedTemplateE2BEnvironment(E2BEnvironment):
@@ -132,14 +140,31 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
         lock = await self._get_template_lock(self._template_name)
         async with lock:
             if force_build or not await self._does_template_exist():
-                self.logger.debug(f"Building shared template {self._template_name}")
+                self.logger.info(f"Building shared template {self._template_name}")
                 await self._create_template()
 
-        # Template exists + is fully built (AsyncTemplate.build waits for
-        # completion). super().start() will _does_template_exist → True and
-        # skip the redundant build, then proceed with _create_sandbox + dir
-        # bootstrap.
-        await super().start(force_build=False)
+        # Template exists. But: ``AsyncTemplate.build`` returns once the build
+        # status flips to "ready", which can precede the moment the image's
+        # ``default`` tag is actually pushable. Retry super().start() on the
+        # specific 404 until propagation catches up. Other SandboxException
+        # subtypes (RateLimitException, etc.) propagate immediately.
+        for attempt, backoff in enumerate((*_TAG_READY_BACKOFFS, None)):
+            try:
+                await super().start(force_build=False)
+                break
+            except SandboxException as exc:
+                if "tag 'default' does not exist" not in str(exc):
+                    raise
+                if backoff is None:
+                    raise RuntimeError(
+                        f"Template {self._template_name} never became "
+                        f"sandbox-ready after {attempt} retries"
+                    ) from exc
+                self.logger.warning(
+                    f"Template {self._template_name} tag not yet pushable "
+                    f"(attempt {attempt + 1}); sleeping {backoff}s"
+                )
+                await asyncio.sleep(backoff)
 
         files_dir = self.environment_dir / "files"
         if files_dir.is_dir() and any(files_dir.iterdir()):

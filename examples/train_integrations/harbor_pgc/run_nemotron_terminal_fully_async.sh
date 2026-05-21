@@ -76,9 +76,10 @@ NUM_PARALLEL_GENERATION_WORKERS=$(( MINI_BATCH_SIZE * 2 ))
 NUM_INFERENCE_ENGINES=2
 TP_SIZE=1
 NUM_POLICY_GPUS=2
-ENABLE_RATE_LIMITING=true  # Enable rate/concurrency limiting for trajectory submissions
-TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fractional values like 1.5 are supported). null or omit to disable rate limiting
-MAX_CONCURRENCY=128        # Maximum concurrent trial.run() calls allowed (must be >= 1). null or omit to disable concurrency limiting
+ENABLE_RATE_LIMITING=true
+TRAJECTORIES_PER_SECOND=5
+# E2B account hard-caps concurrent sandboxes at 100 (429 beyond). Cap well below.
+MAX_CONCURRENCY=64
 
 # Run SkyRL command — talks to vllm-router on the new inference path via
 # SkyRLTerminus2 + SkyRLNativeLLM (see harbor_pgc/README.md).
