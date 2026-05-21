@@ -43,8 +43,9 @@ class SkyRLNativeLLM(BaseLLM):
         model_info: dict with max_input_tokens / max_output_tokens (passed through
             from harbor agent kwargs).
         max_output_tokens: per-call cap (defaults to model_info["max_output_tokens"]).
-        llm_kwargs: ignored extra kwargs (harbor passes LiteLLM-specific ones; we
-            silently swallow them to keep the trial config schema-compatible).
+        llm_kwargs: extra kwargs from agent.kwargs.llm_kwargs. Sampling params
+            (top_p / top_k / min_p / *_penalty) are forwarded to vllm; anything
+            else is silently dropped.
     """
 
     def __init__(
@@ -112,7 +113,9 @@ class SkyRLNativeLLM(BaseLLM):
         **kwargs: Any,
     ) -> LLMResponse:
         if response_format is not None:
-            # Same fallback LiteLLM does — embed JSON schema in the prompt.
+            # /skyrl/v1/generate is plain completion — no native response_format
+            # support. Mirror harbor's stock behaviour and embed the JSON schema
+            # in the prompt for the model to follow.
             import json as _json
 
             try:

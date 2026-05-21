@@ -1,19 +1,30 @@
 set -ex
 
-# wandb api key.
-# export WANDB_API_KEY=YOUR_KEY_HERE
+# PGC variant: e2b sandbox + Qwen3.5-9B + 256K context. Source the shared
+# PGC env file (E2B_API_KEY, WANDB_API_KEY) — same convention as
+# run_harbor_gen.sh.
+DEFAULT_PGC_ENV_FILE="${PGC_ENV_FILE:-/scratch/yuzhou/projects/RL/research/pgc_swe/.env}"
+if [ -f "$DEFAULT_PGC_ENV_FILE" ]; then
+  set -a; source "$DEFAULT_PGC_ENV_FILE"; set +a
+fi
+: "${E2B_API_KEY:?E2B_API_KEY must be set (in $DEFAULT_PGC_ENV_FILE or shell)}"
 
-# Pick the sandbox provider and provide the credentials.
-# export DAYTONA_API_KEY=YOUR_KEY_HERE
-# export MODAL_TOKEN_ID=YOUR_KEY_HERE
-# export MODAL_TOKEN_SECRET=YOUR_KEY_HERE
+# Box has CUDA 13.2 toolkit only; upstream's prebuilt wheels mean no nvcc
+# check fires at install. Pin CUDA_HOME so torch's cpp_extension picks the
+# right toolchain at runtime.
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+# Default to GPUs 0-3 (GPU 7 is often pinned by another user's stale vllm).
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 
 #-----------------------
 # Dataset setup
 #-----------------------
 # Prepare datasets first (downloads from HuggingFace and extracts tasks):
-# uv run examples/train_integrations/harbor/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
-# uv run examples/train_integrations/harbor/prepare_harbor_dataset.py --dataset open-thoughts/OpenThoughts-TB-dev
+# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
+# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/OpenThoughts-TB-dev
 DATA_DIR="$HOME/data/harbor"
 TRAIN_DATA="['$DATA_DIR/CodeContests']"
 EVAL_DATA="['$DATA_DIR/OpenThoughts-TB-dev']"
@@ -22,18 +33,25 @@ EVAL_DATA="['$DATA_DIR/OpenThoughts-TB-dev']"
 # Directory setup
 #-----------------------
 RUN_NAME="codecontest"
-STORAGE_ROOT="/mnt/local_storage/$RUN_NAME"
+STORAGE_ROOT="$HOME/skyrl_runs/$RUN_NAME"
 TRIALS_DIR="$STORAGE_ROOT/trials_run"
 CKPTS_DIR="$STORAGE_ROOT/ckpts"
 EXPORTS_DIR="$STORAGE_ROOT/exports"
 LOG_DIR="$STORAGE_ROOT/logs"
 
 #-----------------------
-# Training setup
+# Model + training setup
 #-----------------------
+# Qwen3.5-9B is multimodal (Qwen3_5ForConditionalGeneration); use the
+# text-only submodel via language_model_only=true on all three workers, and
+# disable sample packing (broken on GDN/linear-attention layers — see
+# transformers#44910, QwenLM/Qwen3.5#104).
+MODEL_NAME="Qwen/Qwen3.5-9B"
+SERVED_NAME="Qwen3.5-9B"
+MAX_MODEL_LEN=262144   # Qwen3.5-9B native max_position_embeddings (256K).
+
 N_SAMPLES_PER_PROMPT=8
 MINI_BATCH_SIZE=32
-MAX_MODEL_LEN=32768
 
 # Algorithmic parameters
 LOSS_REDUCTION="token_mean"  # with step-wise training, we have to use token_mean to be prefix-merge-invariant
@@ -54,22 +72,24 @@ TIS_IMP_RATIO_CAP=2.0
 #----------------
 # Infrastructure setup
 #----------------
-NUM_POLICY_GPUS=8
+NUM_POLICY_GPUS=4
 NUM_INFERENCE_ENGINES=4
-TP_SIZE=2
+TP_SIZE=1
 ENABLE_RATE_LIMITING=true  # Enable rate/concurrency limiting for trajectory submissions
 TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fractional values like 1.5 are supported). null or omit to disable rate limiting
 MAX_CONCURRENCY=512        # Maximum concurrent trial.run() calls allowed (must be >= 1). null or omit to disable concurrency limiting
 
-# Run SkyRL command — drops the upstream-recipe `_SKYRL_USE_NEW_INFERENCE=0`
-# legacy pin and switches entrypoint to our harbor_pgc/ module. We talk to
-# vllm-router via the SkyRLTerminus2 + SkyRLNativeLLM extension (see
-# run_harbor_gen.sh comment for the full rationale).
-uv run --isolated --extra fsdp --extra harbor -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor \
+# Run SkyRL command — talks to vllm-router on the new inference path via
+# SkyRLTerminus2 + SkyRLNativeLLM (see harbor_pgc/README.md).
+uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor \
   data.train_data=$TRAIN_DATA \
   data.val_data=$EVAL_DATA \
-  trainer.policy.model.path=Qwen/Qwen3-8B \
-  generator.inference_engine.served_model_name=Qwen3-8B \
+  trainer.policy.model.path="$MODEL_NAME" \
+  trainer.policy.language_model_only=true \
+  trainer.ref.language_model_only=true \
+  trainer.use_sample_packing=false \
+  generator.inference_engine.served_model_name="$SERVED_NAME" \
+  generator.inference_engine.language_model_only=true \
   harbor_trial_config.trials_dir=$TRIALS_DIR \
   trainer.export_path=$EXPORTS_DIR \
   trainer.ckpt_path=$CKPTS_DIR \

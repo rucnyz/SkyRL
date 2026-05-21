@@ -62,18 +62,14 @@ agent:
       input_cost_per_token: 0.0
       output_cost_per_token: 0.0
 
-    # Additional kwargs passed through to LiteLLM's acompletion() call.
-    # These are forwarded via Terminus2 -> LiteLLM -> litellm.acompletion(**kwargs).
-    # Any parameter that litellm.acompletion() accepts can be set here, including:
-    #   - timeout: LLM request timeout in seconds (default: litellm's 600s)
-    #   - max_retries: Number of retries at the OpenAI SDK level (default: 2)
-    #   - top_p, top_k, frequency_penalty, presence_penalty, etc.
+    # Extra kwargs forwarded into SkyRLNativeLLM (see
+    # harbor_pgc/llms/skyrl_native_llm.py). Only the sampling params it
+    # actually consumes get applied; HarborGenerator additionally injects
+    # `proxy_url` and `tokenizer_path` here at runtime.
     llm_kwargs:
-      # LLM request timeout in seconds. Higher values prevent premature retries.
+      # Per-request HTTP timeout to vllm-router.
       timeout: 900
-      # Set to 0 to disable OpenAI SDK retries from LiteLLM.
-      max_retries: 0
-      # Sampling params that directly get passed to LiteLLM's acompletion() call.
+      # Sampling params forwarded to vllm SamplingParams.
       top_p: 1.0
       top_k: -1
       min_p: 0.0

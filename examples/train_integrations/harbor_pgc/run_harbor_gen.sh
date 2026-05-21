@@ -47,16 +47,9 @@ MAX_CONCURRENCY=512        # Maximum concurrent trial.run() calls allowed (must 
 MODEL_NAME="Qwen/Qwen3.5-9B"
 SERVED_NAME="Qwen3.5-9B"
 
-# `--with "harbor[e2b]"` adds the e2b SDK on top of the project's harbor[daytona,modal]
-# extras. Without this, harbor.environments.e2b raises ImportError on `from e2b import ...`.
-#
-# Runs on the upstream-default new inference path (vllm-router). Our
-# HarborGenerator wires the trial config to a SkyRLTerminus2 subclass via
-# harbor's official ``agent.import_path`` extension point; that subclass
-# routes the LLM call to /skyrl/v1/generate directly (instead of LiteLLM's
-# /v1/chat/completions route which loses vllm's prompt/completion_token_ids
-# extras step-wise training needs).
-# See harbor_pgc/agents/skyrl_terminus_2.py + harbor_pgc/llms/skyrl_native_llm.py.
+# `--with "harbor[e2b]"` adds the e2b SDK on top of the project's
+# harbor[daytona,modal] extras so harbor.environments.e2b can import.
+# See harbor_pgc/README.md for the inference-path / native-backend wiring.
 uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.train_integrations.harbor_pgc.entrypoints.main_harbor_generate \
   data.train_data=$TRAIN_DATA \
   data.val_data=$TRAIN_DATA \

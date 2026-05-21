@@ -209,10 +209,9 @@ class HarborGenerator(GeneratorInterface):
         proxy_url = getattr(inference_engine_client, "proxy_url", None)
         if not proxy_url:
             raise RuntimeError(
-                "HarborGenerator requires the new inference path "
-                "(_SKYRL_USE_NEW_INFERENCE=1 default) so the SkyRL-native "
-                "backend can hit the vllm-router /skyrl/v1/generate endpoint. "
-                "RemoteInferenceClient did not expose a proxy_url."
+                "HarborGenerator requires a RemoteInferenceClient that "
+                "exposes a vllm-router proxy_url. Got "
+                f"{type(inference_engine_client).__name__} instead."
             )
         self.proxy_url = proxy_url
         self.generator_cfg = generator_cfg
