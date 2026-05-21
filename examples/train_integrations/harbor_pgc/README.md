@@ -68,7 +68,7 @@ harbor_pgc/
                                    for ad-hoc tasks with unique Dockerfiles.
   scripts/
     build_skill_images.sh          Build + push the 11 skill-base images to
-                                   ghcr.io/<owner>/pgc-nemotron-<skill>:<tag>.
+                                   ghcr.io/<owner>/nemotron-<skill>:<tag>.
                                    Strips `COPY files/` so the image is
                                    task-agnostic. Run once per dataset bump.
     rewrite_task_dockerimage.py    Rewrite every task.toml's docker_image to

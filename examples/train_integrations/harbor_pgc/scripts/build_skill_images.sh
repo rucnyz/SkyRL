@@ -119,7 +119,7 @@ for skill in "${SKILLS[@]}"; do
     {print}
   ' "$src_dockerfile" > "$build_ctx/Dockerfile"
 
-  img="ghcr.io/${GHCR_OWNER}/pgc-nemotron-${skill}:${IMAGE_TAG}"
+  img="ghcr.io/${GHCR_OWNER}/nemotron-${skill}:${IMAGE_TAG}"
   echo "Building $img"
   ( cd "$build_ctx" && docker build -t "$img" . )
   echo "Pushing $img"
@@ -129,7 +129,7 @@ done
 echo
 echo "Done. Images:"
 for skill in "${SKILLS[@]}"; do
-  echo "  ghcr.io/${GHCR_OWNER}/pgc-nemotron-${skill}:${IMAGE_TAG}"
+  echo "  ghcr.io/${GHCR_OWNER}/nemotron-${skill}:${IMAGE_TAG}"
 done
 echo
 echo "Next: flip each package's visibility to public via the GitHub UI:"

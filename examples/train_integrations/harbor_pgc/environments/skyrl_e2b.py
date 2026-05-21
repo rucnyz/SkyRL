@@ -15,7 +15,7 @@ That's hours of wasted upfront work for every run.
 
 We instead pre-build one skill-base image per Dockerfile (no
 ``COPY files/``) and push to a public registry (e.g.
-``ghcr.io/rucnyz/pgc-nemotron-<skill>:1.0``). At trial time the
+``ghcr.io/rucnyz/nemotron-<skill>:1.0``). At trial time the
 sandbox boots from that image, then we upload the task's
 ``environment/files/`` into ``/app/`` over the e2b SDK — recovering the
 ``COPY files/ /app/`` semantics that the original Dockerfile would have
@@ -81,7 +81,7 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
             raise ValueError(
                 "SharedTemplateE2BEnvironment requires task.toml "
                 "[environment].docker_image to point at a pre-built image "
-                "(e.g. ghcr.io/rucnyz/pgc-nemotron-<skill>:1.0). Run "
+                "(e.g. ghcr.io/rucnyz/nemotron-<skill>:1.0). Run "
                 "scripts/rewrite_task_dockerimage.py first."
             )
         # One alias per (sanitised) docker_image URI. Hash the URI so the alias

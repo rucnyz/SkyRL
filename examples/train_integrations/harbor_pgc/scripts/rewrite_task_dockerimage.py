@@ -60,7 +60,7 @@ def _skill_for(task_toml: Path) -> str | None:
 
 
 def _new_image_uri(owner: str, skill: str, tag: str) -> str:
-    return f"ghcr.io/{owner}/pgc-nemotron-{skill}:{tag}"
+    return f"ghcr.io/{owner}/nemotron-{skill}:{tag}"
 
 
 def main() -> int:
@@ -72,7 +72,7 @@ def main() -> int:
     p.add_argument(
         "--owner",
         default="rucnyz",
-        help="ghcr.io namespace owning the pgc-nemotron-* packages.",
+        help="ghcr.io namespace owning the nemotron-* packages.",
     )
     p.add_argument(
         "--tag",
