@@ -19,6 +19,14 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 # Default to GPUs 0-3 (GPU 7 is often pinned by another user's stale vllm).
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 
+# E2B SDK httpx pool tuning. Default keepalive cap (20) gets blown past with
+# >32 concurrent trials each issuing multiple API calls in flight; httpx then
+# tries to reuse HTTP/2 connections the server has since CLOSED → flood of
+# 'Invalid input ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED'
+# WriteError/ProtocolError, both attempts fail, trial dies. Bump well above
+# MAX_CONCURRENCY so each concurrent trial can hold its own keepalive slot.
+export E2B_MAX_KEEPALIVE_CONNECTIONS="${E2B_MAX_KEEPALIVE_CONNECTIONS:-256}"
+
 #-----------------------
 # Dataset setup
 #-----------------------

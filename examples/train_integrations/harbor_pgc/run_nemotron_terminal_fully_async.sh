@@ -14,6 +14,11 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 
+# Bump E2B SDK httpx keepalive cap (default 20) above MAX_CONCURRENCY so
+# concurrent trials don't recycle CLOSED HTTP/2 connections (which would
+# trigger 'ConnectionInputs.SEND_HEADERS in state ConnectionState.CLOSED').
+export E2B_MAX_KEEPALIVE_CONNECTIONS="${E2B_MAX_KEEPALIVE_CONNECTIONS:-256}"
+
 #-----------------------
 # Dataset setup
 #-----------------------
