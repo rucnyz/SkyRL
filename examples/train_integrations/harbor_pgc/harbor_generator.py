@@ -240,10 +240,12 @@ class HarborGenerator(GeneratorInterface):
         # Convert to a plain (struct-free) dict so we can add fields the yaml
         # schema doesn't declare (e.g. agent.import_path). Leaving it as a
         # struct-locked DictConfig silently drops writes to unknown keys.
-        self._harbor_trial_config_template = OmegaConf.to_container(
-            harbor_cfg, resolve=True
-        )
-        assert isinstance(self._harbor_trial_config_template, dict)
+        if isinstance(harbor_cfg, DictConfig):
+            template = OmegaConf.to_container(harbor_cfg, resolve=True)
+        else:
+            template = deepcopy(harbor_cfg)
+        assert isinstance(template, dict), f"harbor_cfg → {type(template)}"
+        self._harbor_trial_config_template = template
 
         # Set model_name and route the agent to our SkyRL native backend.
         assert ie_cfg.served_model_name is not None, "served_model_name must be set"
