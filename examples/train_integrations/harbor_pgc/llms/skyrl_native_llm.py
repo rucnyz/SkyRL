@@ -127,11 +127,19 @@ class SkyRLNativeLLM(BaseLLM):
 
         messages = list(message_history) + [{"role": "user", "content": prompt}]
 
-        prompt_token_ids: list[int] = self._tokenizer.apply_chat_template(
+        # apply_chat_template returns BatchEncoding-like wrappers depending on
+        # the tokenizer / transformers version. Coerce to a flat list of ints.
+        encoded = self._tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
             tokenize=True,
         )
+        if hasattr(encoded, "input_ids"):
+            encoded = encoded.input_ids
+        # Some tokenizers return a [[...]] 2-D shape; flatten to 1-D.
+        if encoded and isinstance(encoded[0], list):
+            encoded = encoded[0]
+        prompt_token_ids: list[int] = list(encoded)
 
         # Cheap client-side context check so we can raise the harbor-typed
         # exception before the server complains.
