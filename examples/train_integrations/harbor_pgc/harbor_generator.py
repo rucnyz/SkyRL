@@ -21,6 +21,9 @@ import logging
 SKYRL_AGENT_IMPORT_PATH = (
     "examples.train_integrations.harbor_pgc.agents.skyrl_terminus_2:SkyRLTerminus2"
 )
+SKYRL_ENVIRONMENT_IMPORT_PATH = (
+    "examples.train_integrations.harbor_pgc.environments.skyrl_e2b:SharedTemplateE2BEnvironment"
+)
 
 # We have N retries for each trial, if one of the rollout (out of n_samples_per_prompt) fails
 # after N attemptes, we skip this prompt altogether.
@@ -259,6 +262,14 @@ class HarborGenerator(GeneratorInterface):
         skyrl_llm_kwargs = agent_kwargs.setdefault("llm_kwargs", {})
         skyrl_llm_kwargs["proxy_url"] = self.proxy_url
         skyrl_llm_kwargs["tokenizer_path"] = self._tokenizer_path
+
+        # Route the e2b environment to SharedTemplateE2BEnvironment so all
+        # tasks that point at the same docker_image share one e2b template
+        # alias, and per-task ``environment/files/`` get uploaded into /app/
+        # at sandbox start (replaces the COPY files/ stripped from the
+        # pre-built images). See environments/skyrl_e2b.py.
+        environment = self._harbor_trial_config_template.setdefault("environment", {})
+        environment["import_path"] = SKYRL_ENVIRONMENT_IMPORT_PATH
 
         # Step-wise needs per-turn token IDs and logprobs from vLLM via Harbor.
         agent_kwargs = self._harbor_trial_config_template["agent"]["kwargs"]
