@@ -190,20 +190,18 @@ class HarborGenerator(GeneratorInterface):
         inference_engine_client: Any,
         tokenizer,
         max_seq_len: int,
-        model_path: Optional[str] = None,
+        model_path: str,
     ):
         """
         Args:
             generator_cfg: DictConfig object containing the generator configuration
             harbor_cfg: DictConfig object containing the Harbor configuration
-            inference_engine_client: SkyRL inference client. On the new inference
-                path this is a ``RemoteInferenceClient`` whose ``proxy_url`` we
-                hand to the SkyRL-native harbor backend.
+            inference_engine_client: RemoteInferenceClient whose ``proxy_url``
+                we hand to the SkyRL-native harbor backend.
             tokenizer: tokenizer object for encoding and decoding text
             max_seq_len: Maximum total sequence length (prompt + response). Used to truncate responses.
             model_path: HF model path forwarded to harbor agents so the SkyRL
                 native backend can load the matching chat-template tokenizer.
-                Falls back to ``inference_engine_client.model_name`` when omitted.
         """
         ie_cfg = generator_cfg.inference_engine
         proxy_url = getattr(inference_engine_client, "proxy_url", None)
@@ -217,14 +215,7 @@ class HarborGenerator(GeneratorInterface):
         self.generator_cfg = generator_cfg
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
-        self._tokenizer_path = model_path or getattr(
-            inference_engine_client, "model_name", None
-        )
-        if not self._tokenizer_path:
-            raise RuntimeError(
-                "HarborGenerator could not resolve a tokenizer path; pass "
-                "model_path=trainer.policy.model.path through main_harbor_generate.py."
-            )
+        self._tokenizer_path = model_path
 
         if not getattr(generator_cfg, "step_wise_trajectories", False):
             raise ValueError(

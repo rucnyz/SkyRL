@@ -10,6 +10,7 @@ and decode the response token_ids back to text.
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,16 @@ from harbor.models.metric import UsageInfo
 
 # Sentinel max output tokens when no cap is configured.
 _DEFAULT_MAX_OUTPUT_TOKENS = 16384
+
+
+@functools.lru_cache(maxsize=4)
+def _load_tokenizer_cached(tokenizer_path: str):
+    """Load HF tokenizer once per (process, path). Harbor instantiates a
+    fresh agent + LLM per trial, so without caching we'd hit
+    ``AutoTokenizer.from_pretrained`` on every trial — fast against the
+    on-disk HF cache but pointless I/O.
+    """
+    return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
 
 
 class SkyRLNativeLLM(BaseLLM):
@@ -83,12 +94,10 @@ class SkyRLNativeLLM(BaseLLM):
             for k in ("top_p", "top_k", "min_p", "frequency_penalty", "presence_penalty")
             if k in llm_kwargs and llm_kwargs[k] is not None
         }
-        # Build tokenizer eagerly so chat-template errors surface at init, not on
-        # the first request mid-trial.
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_path,
-            trust_remote_code=True,
-        )
+        # Eagerly resolve the tokenizer so chat-template errors surface at
+        # init time, not on the first request mid-trial. The loader is
+        # lru_cache'd so repeat trials share one instance.
+        self._tokenizer = _load_tokenizer_cached(tokenizer_path)
 
     # --- BaseLLM interface ------------------------------------------------
 
@@ -113,9 +122,9 @@ class SkyRLNativeLLM(BaseLLM):
         **kwargs: Any,
     ) -> LLMResponse:
         if response_format is not None:
-            # /skyrl/v1/generate is plain completion — no native response_format
-            # support. Mirror harbor's stock behaviour and embed the JSON schema
-            # in the prompt for the model to follow.
+            # /skyrl/v1/generate is plain completion — no native
+            # response_format support. Embed the JSON schema directly in the
+            # prompt for the model to follow.
             import json as _json
 
             try:
