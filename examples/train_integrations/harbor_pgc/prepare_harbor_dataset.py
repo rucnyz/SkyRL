@@ -4,12 +4,15 @@ Prepare Harbor task datasets from HuggingFace Hub.
 Downloads a dataset and extracts Harbor tasks from parquet files containing
 tar-archived task directories (columns: path, task_binary).
 
-Output directory defaults to ~/data/harbor/<repo-name>.
+Output directory defaults to ``data/<repo-name>`` next to this script
+(i.e. ``examples/train_integrations/harbor_pgc/data/<repo-name>``). Land
+the data inside the example dir so reproducers know exactly where it
+goes. The ``data/`` subdir is .gitignored.
 
 Usage:
 
-    uv run examples/train_integrations/harbor/prepare_harbor_dataset.py \
-        --dataset open-thoughts/CodeContests
+    uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \\
+        --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks
 """
 
 import argparse
@@ -109,7 +112,9 @@ def prepare(dataset_name: str, output_dir: str | None = None) -> str:
 
     repo_name = dataset_name.split("/")[-1] if "/" in dataset_name else dataset_name
     if output_dir is None:
-        output_dir = os.path.join("~/data/harbor", repo_name)
+        # Default to ``data/<repo-name>`` colocated with this script so the
+        # dataset lives inside the example directory (gitignored).
+        output_dir = str(Path(__file__).resolve().parent / "data" / repo_name)
     output_path = Path(os.path.expanduser(output_dir)).resolve()
 
     print(f"Downloading {dataset_name}...")

@@ -10,6 +10,7 @@ environment + reward source, agent rollouts running inside an
 | | upstream `harbor/` | this `harbor_pgc/` |
 |---|---|---|
 | Sandbox backend | daytona / modal | **e2b** |
+| Dataset | CodeContests | **nvidia/Nemotron-Terminal-Synthetic-Tasks** (6 skill mix) |
 | Model | Qwen3-8B (8K ctx) | Qwen3.5-9B (256K ctx) |
 | Inference path | SkyRL legacy HTTP endpoint | **upstream-default new path** (vllm-router) |
 | LLM client | LiteLLM → `/v1/chat/completions` | **`SkyRLNativeLLM` → `/skyrl/v1/generate`** |
@@ -40,8 +41,10 @@ harbor_pgc/
                                    agent.import_path + agent.kwargs so
                                    harbor instantiates SkyRLTerminus2.
   dataset.py                       HarborTaskDataset: loads task directory
-                                   paths from CodeContests-style dumps.
-  prepare_harbor_dataset.py        Downloads + extracts datasets from HuggingFace.
+                                   paths from a Harbor-style dataset dump.
+  prepare_harbor_dataset.py        Downloads + extracts a HuggingFace dataset
+                                   into ``data/<repo-name>/`` next to this
+                                   script. ``data/`` is .gitignored.
   prebuild_e2b_templates.py        Pre-builds the per-task e2b template
                                    alias used by harbor's E2BEnvironment.
                                    Must be run once before training so we
@@ -53,8 +56,14 @@ harbor_pgc/
     main_harbor.py                 Full GRPO training entrypoint.
     main_harbor_fully_async.py     Fully-async training entrypoint.
     main_harbor_generate.py        Generation-only sanity entrypoint.
-  run_codecontest.sh               Code-contest training (sync).
-  run_codecontest_fully_async.sh   Code-contest training (fully async).
+  data/                            (gitignored) prepared task directories
+                                   land here, e.g.
+                                   data/Nemotron-Terminal-Synthetic-Tasks/.
+  run_nemotron_terminal.sh         Nemotron-Terminal training (sync).
+  run_nemotron_terminal_fully_async.sh
+                                   Nemotron-Terminal training (fully async).
+  run_nemotron_terminal_smoke.sh   Tiny-subset smoke training (validates
+                                   FSDP + weight sync end-to-end in ~1 hour).
   run_harbor_gen.sh                Generation-only sanity launcher.
 ```
 
@@ -69,25 +78,31 @@ cd SkyRL
 export E2B_API_KEY=your_e2b_api_key
 export WANDB_API_KEY=your_wandb_api_key   # optional, fall back to console logger
 
-# 2. Prepare dataset (skip if already on disk).
+# 2. Prepare the dataset. Lands in
+#    examples/train_integrations/harbor_pgc/data/Nemotron-Terminal-Synthetic-Tasks/
+#    (gitignored), so reproducers always know where it goes.
 uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \
-    --dataset open-thoughts/CodeContests
+    --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks
 
 # 3. Pre-build the e2b template aliases (one-time, ~1 min/task sequentially).
 #    Without this, multiple concurrent trials race on the first sandbox.create
 #    and e2b's rate limiter cancels most of them, leaving zombie aliases that
-#    404 on subsequent runs.
+#    404 on subsequent runs. Use --limit N for smoke runs.
 uv run --isolated --extra harbor --with "harbor[e2b]" \
     -m examples.train_integrations.harbor_pgc.prebuild_e2b_templates \
-    "$HOME/data/harbor/CodeContests" [--limit N]
+    examples/train_integrations/harbor_pgc/data/Nemotron-Terminal-Synthetic-Tasks \
+    [--limit N]
 
 # 4. Sanity generation (no training, ~3-20 min depending on prompt difficulty).
 bash examples/train_integrations/harbor_pgc/run_harbor_gen.sh
 
-# 5. Training.
-bash examples/train_integrations/harbor_pgc/run_codecontest.sh
+# 5. Smoke training (~1 hour, validates FSDP + weight sync end-to-end).
+bash examples/train_integrations/harbor_pgc/run_nemotron_terminal_smoke.sh
+
+# 6. Full training.
+bash examples/train_integrations/harbor_pgc/run_nemotron_terminal.sh
 # or the fully-async variant:
-bash examples/train_integrations/harbor_pgc/run_codecontest_fully_async.sh
+bash examples/train_integrations/harbor_pgc/run_nemotron_terminal_fully_async.sh
 ```
 
 ### Box-specific notes (dev box)

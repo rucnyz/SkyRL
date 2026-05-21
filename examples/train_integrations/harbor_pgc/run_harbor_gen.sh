@@ -20,11 +20,13 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 # Pin GPUs (default 4,5,6,7 — GPU 0 is sometimes taken by panmz/prelude on this box)
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
 
-# Prepare dataset first (downloads from HuggingFace and extracts tasks):
-# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
+# Prepare dataset first (downloads from HuggingFace and extracts tasks into
+# examples/train_integrations/harbor_pgc/data/<repo>/):
+# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \
+#     --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks
 
-DATA_DIR="$HOME/data/harbor"
-TRAIN_DATA="['$DATA_DIR/CodeContests']"
+DATA_DIR="$(dirname "$0")/data"
+TRAIN_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"
 
 CHAT_TEMPLATE_PATH="$(dirname "$0")/../../../skyrl/train/utils/templates/qwen3_acc_thinking.jinja2"
 TRIALS_DIR="$HOME/trials_run"

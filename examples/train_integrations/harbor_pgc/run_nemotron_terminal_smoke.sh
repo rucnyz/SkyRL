@@ -28,11 +28,13 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 #-----------------------
 # Dataset
 #-----------------------
-DATA_DIR="$HOME/data/harbor"
-# 16-task symlinked subset of CodeContests so 1 epoch ≈ a handful of steps.
-# Created with: mkdir -p CodeContests_smoke16 && ls CodeContests | head -16 | xargs -I{} ln -s "$PWD/CodeContests/{}" CodeContests_smoke16/
-TRAIN_DATA="['$DATA_DIR/CodeContests_smoke16']"
-EVAL_DATA="['$DATA_DIR/CodeContests_smoke16']"  # eval is disabled below; pointing at train avoids needing a second dataset
+DATA_DIR="$(dirname "$0")/data"
+# Tiny task subset so 1 epoch ≈ a handful of steps. Create via something like:
+#   mkdir -p Nemotron-Terminal-Synthetic-Tasks_smoke16
+#   ls Nemotron-Terminal-Synthetic-Tasks | head -16 | \
+#       xargs -I{} ln -s "$PWD/Nemotron-Terminal-Synthetic-Tasks/{}" Nemotron-Terminal-Synthetic-Tasks_smoke16/
+TRAIN_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks_smoke16']"
+EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks_smoke16']"  # eval is disabled below; pointing at train avoids needing a second dataset
 
 #-----------------------
 # Storage

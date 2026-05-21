@@ -22,12 +22,13 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 #-----------------------
 # Dataset setup
 #-----------------------
-# Prepare datasets first (downloads from HuggingFace and extracts tasks):
-# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/CodeContests
-# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py --dataset open-thoughts/OpenThoughts-TB-dev
-DATA_DIR="$HOME/data/harbor"
-TRAIN_DATA="['$DATA_DIR/CodeContests']"
-EVAL_DATA="['$DATA_DIR/OpenThoughts-TB-dev']"
+# Prepare dataset first (downloads from HuggingFace and extracts tasks into
+# examples/train_integrations/harbor_pgc/data/<repo>/):
+# uv run examples/train_integrations/harbor_pgc/prepare_harbor_dataset.py \
+#     --dataset nvidia/Nemotron-Terminal-Synthetic-Tasks
+DATA_DIR="$(dirname "$0")/data"
+TRAIN_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"
+EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"  # TODO: carve out a held-out val split (upstream README: 5386 train + 598 val)
 
 #-----------------------
 # Directory setup
