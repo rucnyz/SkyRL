@@ -17,8 +17,9 @@ export CUDA_HOME=/usr/local/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 
-# Pin GPUs (default 4,5,6,7 — GPU 0 is sometimes taken by panmz/prelude on this box)
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
+# Pin GPUs — match run_nemotron_terminal.sh default to keep the sanity
+# launcher aligned with the main 4-GPU sync layout.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 
 # Prepare dataset first (downloads from HuggingFace and extracts tasks into
 # examples/train_integrations/harbor_pgc/data/<repo>/):

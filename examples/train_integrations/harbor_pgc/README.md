@@ -63,10 +63,6 @@ harbor_pgc/
   dataset.py                       HarborTaskDataset: walks task dirs.
   prepare_harbor_dataset.py        Downloads + extracts a HuggingFace dataset
                                    into data/<repo-name>/ (gitignored).
-  prebuild_e2b_templates.py        (legacy) per-task template pre-builder
-                                   for ad-hoc datasets with unique
-                                   Dockerfiles. Not used by the Nemotron
-                                   flow.
   scripts/
     build_skill_images.sh          Build + push 11 ghcr.io skill-base images.
                                    One-time per dataset bump.
