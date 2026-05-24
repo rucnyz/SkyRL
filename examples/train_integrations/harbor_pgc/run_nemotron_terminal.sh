@@ -41,7 +41,7 @@ EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"  # TODO: carve out a
 #-----------------------
 # Directory setup
 #-----------------------
-RUN_NAME="codecontest"
+RUN_NAME="codecontest_fracreward_v1"
 STORAGE_ROOT="$HOME/skyrl_runs/$RUN_NAME"
 TRIALS_DIR="$STORAGE_ROOT/trials_run"
 CKPTS_DIR="$STORAGE_ROOT/ckpts"
@@ -60,7 +60,7 @@ SERVED_NAME="Qwen3.5-9B"
 MAX_MODEL_LEN=262144   # Qwen3.5-9B native max_position_embeddings (256K).
 
 N_SAMPLES_PER_PROMPT=8
-MINI_BATCH_SIZE=32
+MINI_BATCH_SIZE=64
 
 # Algorithmic parameters
 LOSS_REDUCTION="token_mean"  # with step-wise training, we have to use token_mean to be prefix-merge-invariant
@@ -90,7 +90,7 @@ TRAJECTORIES_PER_SECOND=5  # Maximum trajectories per second (must be >= 1.0, fr
 # SharedTemplateE2BEnvironment._create_sandbox reaping zombie sandboxes from
 # mid-flight HTTP failures (see environments/skyrl_e2b.py), the effective
 # steady-state ceiling stays at MAX_CONCURRENCY without zombie inflation.
-MAX_CONCURRENCY=64
+MAX_CONCURRENCY=80
 
 # Run SkyRL command — talks to vllm-router on the new inference path via
 # SkyRLTerminus2 + SkyRLNativeLLM (see harbor_pgc/README.md).
@@ -148,7 +148,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   trainer.logger=wandb \
   trainer.project_name=harbor \
   trainer.run_name=$RUN_NAME \
-  trainer.resume_mode=latest \
+  trainer.resume_mode=none \
   generator.inference_engine.backend=vllm \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.weight_sync_backend=nccl \
