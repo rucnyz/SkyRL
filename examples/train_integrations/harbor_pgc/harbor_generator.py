@@ -1,7 +1,10 @@
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, List, Optional
+from urllib.parse import urlparse
 from loguru import logger
 from uuid import uuid4
 from skyrl.train.generators.base import GeneratorInterface, GeneratorInput, GeneratorOutput, TrajectoryID
@@ -15,6 +18,32 @@ from harbor.models.trial.config import TrialConfig
 from harbor.models.agent.rollout_detail import RolloutDetail
 
 import logging
+
+
+# Fractional reward with all-pass bonus.
+# Binary reward.txt (0/1) is dense-signal-starved: 5/6 passing tests is the same
+# as 0/6, so most GRPO groups end up all-zero and provide no gradient. ctrf.json
+# from pytest carries per-test pass/fail; we use passed/tests, with a >1 bonus
+# when everything passes so the policy still prefers full success over partial.
+ALL_PASS_BONUS = 1.2
+
+
+def _fractional_reward(results) -> float:
+    """Return passed/tests from ctrf.json (with all-pass bonus); fall back to binary."""
+    binary = float(results.verifier_result.rewards["reward"])
+    try:
+        trial_dir = Path(urlparse(results.trial_uri).path)
+        ctrf = json.loads((trial_dir / "verifier" / "ctrf.json").read_text())
+        summary = ctrf["results"]["summary"]
+        n = summary["tests"]
+        if n <= 0:
+            return binary
+        passed = summary["passed"]
+        frac = passed / n
+        return ALL_PASS_BONUS if frac >= 1.0 else frac
+    except Exception as e:
+        logger.warning(f"ctrf parse failed ({e}); falling back to binary reward {binary}")
+        return binary
 
 # Harbor extension point: importable agent class fed to AgentConfig.import_path.
 # Keeping this constant in one place so future renames stay in sync.
@@ -378,7 +407,7 @@ class HarborGenerator(GeneratorInterface):
                     logger.warning(f"{prefix} failed: Exception info: {results.exception_info}. Results: {results}")
                     continue
                 else:
-                    reward = float(results.verifier_result.rewards["reward"])
+                    reward = _fractional_reward(results)
 
                 # Extract rollout details and check for success
                 rollout_details = results.agent_result.rollout_details
