@@ -12,7 +12,7 @@ fi
 export CUDA_HOME=/usr/local/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,5,6}"
 
 # Bump E2B SDK httpx keepalive cap (default 20) above MAX_CONCURRENCY so
 # concurrent trials don't recycle CLOSED HTTP/2 connections (which would
@@ -33,7 +33,7 @@ EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"  # TODO: carve out a
 #-----------------------
 # Directory setup
 #-----------------------
-RUN_NAME="codecontest-fullyasync"
+RUN_NAME="codecontest_fracreward_async_v2"
 STORAGE_ROOT="$HOME/skyrl_runs/$RUN_NAME"
 TRIALS_DIR="$STORAGE_ROOT/trials_run"
 CKPTS_DIR="$STORAGE_ROOT/ckpts"
@@ -48,7 +48,7 @@ SERVED_NAME="Qwen3.5-9B"
 MAX_MODEL_LEN=262144   # Qwen3.5-9B native max_position_embeddings (256K).
 
 N_SAMPLES_PER_PROMPT=8
-MINI_BATCH_SIZE=16
+MINI_BATCH_SIZE=64
 
 # Algorithmic parameters
 LOSS_REDUCTION="token_mean"  # with step-wise training, we have to use token_mean to be prefix-merge-invariant
@@ -76,16 +76,20 @@ MAX_STALENESS_STEPS=4
 NUM_PARALLEL_GENERATION_WORKERS=$(( MINI_BATCH_SIZE * 2 ))
 
 #----------------
-# Infrastructure setup. Tuned for 1n4g (the dev box default).
+# Infrastructure setup. 6 GPUs: 4 vLLM engines + 2 FSDP train.
+# Ratio 64 concurrent agents / 4 engines = 16:1 (matches sync mode's
+# healthy ratio; v1 had 2 engines + 80 conc = 40:1 → e2b death spiral).
 #----------------
-NUM_INFERENCE_ENGINES=2
+NUM_INFERENCE_ENGINES=4
 TP_SIZE=1
 NUM_POLICY_GPUS=2
 ENABLE_RATE_LIMITING=true
 TRAJECTORIES_PER_SECOND=5
 # 64 concurrent trials with the zombie reaper in
 # SharedTemplateE2BEnvironment._create_sandbox (see environments/skyrl_e2b.py)
-# so we stay within the e2b 100-sandbox account cap.
+# so we stay within the e2b 100-sandbox account cap. v1 at 80 conc + 2 vLLM
+# engines hit e2b death spiral (40 agent/engine too high); 64 + 4 engines
+# restores sync mode's 16 agent/engine ratio.
 MAX_CONCURRENCY=64
 
 # Run SkyRL command — talks to vllm-router on the new inference path via
@@ -146,7 +150,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   trainer.logger=wandb \
   trainer.project_name=harbor \
   trainer.run_name=$RUN_NAME \
-  trainer.resume_mode=latest \
+  trainer.resume_mode=none \
   generator.inference_engine.backend=vllm \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.weight_sync_backend=nccl \
