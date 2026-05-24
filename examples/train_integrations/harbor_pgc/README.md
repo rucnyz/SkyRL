@@ -38,6 +38,16 @@ alias per skill rather than per task. A per-alias `asyncio.Lock`
 serialises concurrent template builds so the first trial through wins
 the build and the rest cache-hit.
 
+**Fractional reward** (`harbor_generator.py:_fractional_reward`) — harbor's
+default reward is binary (`reward.txt` ∈ {0, 1}: pytest all-passes or
+not). With a typical task running 5-8 tests, partial-credit attempts
+(e.g. 5/6 passing) get the same 0 reward as no-credit attempts, and GRPO
+groups end up dominated by all-zero outcomes that provide no gradient.
+We instead read pytest's structured `ctrf.json` and return
+`passed/tests`, with an `ALL_PASS_BONUS=1.2` bump when every test
+passes so the policy still strictly prefers full success over partial.
+Falls back to the binary reward.txt path if ctrf.json is missing.
+
 ### Structure
 
 ```
@@ -71,7 +81,6 @@ harbor_pgc/
   run_nemotron_terminal.sh         Full training (sync GRPO).
   run_nemotron_terminal_fully_async.sh
                                    Full training (fully-async GRPO).
-  run_nemotron_terminal_smoke.sh   Tiny-subset smoke for the trainer wiring.
   run_harbor_gen.sh                Generation-only sanity launcher.
 ```
 
@@ -102,16 +111,24 @@ bash examples/train_integrations/harbor_pgc/scripts/build_skill_images.sh
 uv run -m examples.train_integrations.harbor_pgc.scripts.rewrite_task_dockerimage \
     examples/train_integrations/harbor_pgc/data/Nemotron-Terminal-Synthetic-Tasks
 
-# 5. (optional) Smoke training — points at a hand-picked _smoke16/ subset
-#    you must create. Validates FSDP + weight sync + the
-#    SharedTemplateE2BEnvironment path end-to-end (~30 min to first GRPO step).
-bash examples/train_integrations/harbor_pgc/run_nemotron_terminal_smoke.sh
-
-# 6. Full training.
+# 5. Full training. Sync defaults to 4 GPUs (colocated FSDP + vLLM);
+#    fully-async defaults to 6 GPUs (2 FSDP train + 4 vLLM inference).
 bash examples/train_integrations/harbor_pgc/run_nemotron_terminal.sh
 #   or fully-async:
 bash examples/train_integrations/harbor_pgc/run_nemotron_terminal_fully_async.sh
 ```
+
+### Concurrency & vLLM ratio
+
+`max_concurrency` (parallel e2b sandboxes) and `num_inference_engines`
+(vLLM replicas) need to stay roughly in step. The 16:1 agents-per-engine
+ratio the sync launcher uses (64 conc / 4 engines) has been stable for
+multi-day runs; bumping conc to 80 with only 2 engines (the upstream
+fully-async default) tips into a death spiral where LLM responses queue,
+e2b sandboxes idle past their connection-reuse window, `tmux_session.
+capture_pane` calls time out under tenacity retry, and `harbor.environ
+ments.e2b:stop` starts failing en masse. The fully-async launcher's
+defaults (6 GPUs, 4 engines, 64 conc) keep the same 16:1 ratio.
 
 ### Dataset variants
 
@@ -139,6 +156,9 @@ Other harbor-format public datasets:
 - `.python-version` pins CPython 3.12 — SkyRL's pinned wheel URLs use
   `python_version == '3.12'` markers; system default 3.13 falls back to
   source builds that then trip torch's nvcc version check.
-- We pass `CUDA_VISIBLE_DEVICES=0,1,2,3` to stay clear of GPU 7 which
-  another user's stale `VLLM::EngineCore` is often sitting on.
+- `run_nemotron_terminal.sh` defaults to `CUDA_VISIBLE_DEVICES=0,1,2,3`
+  (4-GPU colocated sync) and `run_nemotron_terminal_fully_async.sh` to
+  `0,1,2,3,5,6` (6 GPUs: 2 FSDP train on 5,6 + 4 vLLM inference on 0–3),
+  both avoiding GPU 4 / 7 where another user's stale `VLLM::EngineCore`
+  is often sitting.
 - B300 GPUs (cc 10.3) handle Qwen3.5-9B at 256K context comfortably.
