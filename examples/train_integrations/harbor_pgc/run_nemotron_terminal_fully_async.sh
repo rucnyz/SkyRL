@@ -33,7 +33,7 @@ EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks']"  # TODO: carve out a
 #-----------------------
 # Directory setup
 #-----------------------
-RUN_NAME="codecontest_fracreward_async_v2"
+RUN_NAME="codecontest_fracreward_async_v3"
 STORAGE_ROOT="$HOME/skyrl_runs/$RUN_NAME"
 TRIALS_DIR="$STORAGE_ROOT/trials_run"
 CKPTS_DIR="$STORAGE_ROOT/ckpts"
@@ -72,7 +72,7 @@ TIS_IMP_RATIO_CAP=2.0
 # Constraint: mini_batch_size <= num_parallel_generation_workers <= mini_batch_size * (max_staleness_steps + 1)
 # Can increase num_parallel_generation_workers based on your hardware resources (e.g. KV cache size).
 # -------------------------
-MAX_STALENESS_STEPS=4
+MAX_STALENESS_STEPS=3
 NUM_PARALLEL_GENERATION_WORKERS=$(( MINI_BATCH_SIZE * 2 ))
 
 #----------------
