@@ -10,7 +10,10 @@ and decode the response token_ids back to text.
 
 from __future__ import annotations
 
+import asyncio
+import atexit
 import functools
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,68 @@ from harbor.models.metric import UsageInfo
 
 # Sentinel max output tokens when no cap is configured.
 _DEFAULT_MAX_OUTPUT_TOKENS = 16384
+
+# Module-level singleton aiohttp client — mirrors NeMo-Gym's pattern
+# (Gym/nemo_gym/server_utils.py:get_global_aiohttp_client) so each Ray actor
+# process reuses one ClientSession across all trials instead of churning a
+# new one per LLM call.
+#
+# Why: harbor instantiates a fresh SkyRLNativeLLM per trial and each trial
+# fires dozens of LLM calls; the original code opened+closed a new
+# aiohttp.ClientSession (and thus a new TCP socket + asyncio transport) per
+# call. Under 64 concurrent agents this triggered an asyncio fd-reuse race
+# (`RuntimeError: File descriptor N is used by transport <TCPTransport ...>`)
+# where the kernel reuses an fd before asyncio finishes tearing down the
+# previous transport bound to it. A shared session avoids the churn entirely.
+_GLOBAL_AIOHTTP_CLIENT: aiohttp.ClientSession | None = None
+_GLOBAL_AIOHTTP_CLIENT_LOCK: asyncio.Lock | None = None
+
+_logger = logging.getLogger(__name__)
+
+
+def _get_lock() -> asyncio.Lock:
+    global _GLOBAL_AIOHTTP_CLIENT_LOCK
+    if _GLOBAL_AIOHTTP_CLIENT_LOCK is None:
+        _GLOBAL_AIOHTTP_CLIENT_LOCK = asyncio.Lock()
+    return _GLOBAL_AIOHTTP_CLIENT_LOCK
+
+
+async def _get_global_aiohttp_client() -> aiohttp.ClientSession:
+    """Return the process-wide ClientSession, lazily creating it on first call."""
+    global _GLOBAL_AIOHTTP_CLIENT
+    if _GLOBAL_AIOHTTP_CLIENT is not None and not _GLOBAL_AIOHTTP_CLIENT.closed:
+        return _GLOBAL_AIOHTTP_CLIENT
+    async with _get_lock():
+        if _GLOBAL_AIOHTTP_CLIENT is None or _GLOBAL_AIOHTTP_CLIENT.closed:
+            _GLOBAL_AIOHTTP_CLIENT = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(
+                    limit=1024,
+                    limit_per_host=256,
+                    keepalive_timeout=30,
+                ),
+                # No session-level timeout — each call sets its own via post(timeout=...)
+                # so different trials can pass different timeouts.
+                timeout=aiohttp.ClientTimeout(),
+                cookie_jar=aiohttp.DummyCookieJar(),
+            )
+            _logger.info("Initialized global SkyRLNativeLLM aiohttp ClientSession")
+    return _GLOBAL_AIOHTTP_CLIENT
+
+
+def _atexit_close_global_aiohttp_client() -> None:
+    """Best-effort cleanup at process exit. atexit may not fire if the actor
+    is SIGKILL'd, but OS will reclaim fds in that case anyway."""
+    global _GLOBAL_AIOHTTP_CLIENT
+    if _GLOBAL_AIOHTTP_CLIENT is None or _GLOBAL_AIOHTTP_CLIENT.closed:
+        return
+    try:
+        asyncio.run(_GLOBAL_AIOHTTP_CLIENT.close())
+    except Exception:
+        pass
+    _GLOBAL_AIOHTTP_CLIENT = None
+
+
+atexit.register(_atexit_close_global_aiohttp_client)
 
 
 @functools.lru_cache(maxsize=4)
@@ -179,16 +244,16 @@ class SkyRLNativeLLM(BaseLLM):
 
         url = f"{self._proxy_url}/skyrl/v1/generate"
         timeout = aiohttp.ClientTimeout(total=self._timeout_sec)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    if "ContextLengthExceeded" in body or "maximum context length" in body.lower():
-                        raise ContextLengthExceededError()
-                    raise RuntimeError(
-                        f"SkyRL /skyrl/v1/generate {resp.status}: {body[:500]}"
-                    )
-                response = await resp.json()
+        session = await _get_global_aiohttp_client()
+        async with session.post(url, json=payload, headers=headers, timeout=timeout) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                if "ContextLengthExceeded" in body or "maximum context length" in body.lower():
+                    raise ContextLengthExceededError()
+                raise RuntimeError(
+                    f"SkyRL /skyrl/v1/generate {resp.status}: {body[:500]}"
+                )
+            response = await resp.json()
 
         # /skyrl/v1/generate response shape:
         #   {"choices": [{"token_ids": [...], "finish_reason": "...",
