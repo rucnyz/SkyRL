@@ -114,6 +114,23 @@ bash examples/train_integrations/harbor_pgc/run_nemotron_terminal.sh
 bash examples/train_integrations/harbor_pgc/run_nemotron_terminal_fully_async.sh
 ```
 
+### Inspecting fractional-reward gradient signal
+
+`result.json` only logs the verifier's binary 0/1, so audits done from
+trial dirs undercount what GRPO actually sees. The training-time
+fractional reward (passed/tests + all-pass bonus) is recoverable from
+each trial's `verifier/ctrf.json`:
+
+```bash
+python3 scripts/mixed_group_analysis.py \
+    /scratch/yuzhou/skyrl_runs/<run_name>/trials_run
+```
+
+Reports per-trial reward histogram + GRPO mixed-group % under both
+binary and fractional formulas, and lists tasks whose groups were
+all-zero in binary but mixed in fractional (i.e. recovered gradient
+signal). On the v3 run mixed-groups jumped from 36% → 84%.
+
 ### Concurrency & vLLM ratio
 
 `max_concurrency` (parallel e2b sandboxes) and `num_inference_engines`
