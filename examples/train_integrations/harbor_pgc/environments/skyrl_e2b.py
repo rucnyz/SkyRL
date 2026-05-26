@@ -37,19 +37,146 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
-from e2b import AsyncTemplate, Template
+from e2b import AsyncSandbox, AsyncTemplate, Template
 from e2b.exceptions import SandboxException
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from harbor.environments.e2b import E2BEnvironment
 from harbor.models.trial.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
 _E2B_API_BASE = "https://api.e2b.app"
+
+# ---------------------------------------------------------------------------
+# Owner-tracked sandbox reaping
+# ---------------------------------------------------------------------------
+# Why this exists
+# ---------------
+# Harbor's ``E2BEnvironment.stop()`` calls ``self._sandbox.kill()`` through the
+# e2b SDK. If that SDK call hits an HTTP 5xx / transient network error and
+# exhausts tenacity's 2-attempt retry budget, ``stop()`` logs an ERROR but the
+# ``finally`` block still drops the local reference (``self._sandbox = None``).
+# The sandbox on the e2b side never received its DELETE — it lingers until
+# e2b's own inactivity_timeout reaps it (observed: hours-to-days). On a 100-
+# sandbox account cap, a steady drip of these zombies starves throughput.
+#
+# This module adds a process-wide registry + background reaper that
+# deterministically detects orphans without relying on idle-time heuristics:
+#
+#   - Each successful sandbox create registers the trial's ``environment_name``
+#     in ``_LIVE_ENVIRONMENT_NAMES``.
+#   - The metadata stamped onto the sandbox includes ``owner_pid`` so the
+#     reaper only ever touches sandboxes our process created (multiple
+#     concurrent runs sharing an E2B account are safe).
+#   - A background task lists e2b sandboxes every ``_REAPER_INTERVAL_SEC``;
+#     anything tagged with our PID whose ``environment_name`` is NOT in the
+#     live registry is guaranteed orphaned (the Trial that created it called
+#     ``stop()`` already, or its Python object was GC'd) and gets a REST
+#     DELETE.
+#   - ``stop()`` also fires a backup REST DELETE in case the SDK kill silently
+#     swallowed an exception.
+
+logger = logging.getLogger(__name__)
+
+_LIVE_ENVIRONMENT_NAMES: set[str] = set()
+_LIVE_ENVIRONMENT_LOCK: asyncio.Lock | None = None  # lazily init in current event loop
+_OWNER_REAPER_TASK: asyncio.Task[None] | None = None
+_REAPER_INTERVAL_SEC = 60.0
+_OWNER_PID = str(os.getpid())
+
+
+def _get_live_lock() -> asyncio.Lock:
+    global _LIVE_ENVIRONMENT_LOCK
+    if _LIVE_ENVIRONMENT_LOCK is None:
+        _LIVE_ENVIRONMENT_LOCK = asyncio.Lock()
+    return _LIVE_ENVIRONMENT_LOCK
+
+
+async def _owner_reaper_loop(interval_sec: float = _REAPER_INTERVAL_SEC) -> None:
+    """Periodically delete e2b sandboxes that this process created but whose
+    owning Trial has finished. Runs until cancelled."""
+    api_key = os.environ.get("E2B_API_KEY")
+    if not api_key:
+        return
+    while True:
+        try:
+            await asyncio.sleep(interval_sec)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{_E2B_API_BASE}/sandboxes",
+                    headers={"X-API-Key": api_key},
+                )
+                if resp.status_code != 200:
+                    continue
+                async with _get_live_lock():
+                    live = set(_LIVE_ENVIRONMENT_NAMES)
+                killed = 0
+                for sbx in resp.json():
+                    meta = sbx.get("metadata") or {}
+                    # Only touch sandboxes this process created. Other
+                    # PGC processes on the same E2B account get their own
+                    # reaper.
+                    if meta.get("owner_pid") != _OWNER_PID:
+                        continue
+                    env_name = meta.get("environment_name")
+                    if not env_name:
+                        # We always stamp environment_name; absent means
+                        # foreign or pre-this-fix. Leave alone.
+                        continue
+                    if env_name in live:
+                        # Trial that created it is still active.
+                        continue
+                    sid = sbx.get("sandboxID")
+                    if not sid:
+                        continue
+                    try:
+                        del_resp = await client.delete(
+                            f"{_E2B_API_BASE}/sandboxes/{sid}",
+                            headers={"X-API-Key": api_key},
+                        )
+                        # 204 = killed, 404 = already gone (race with SDK
+                        # finally completing). Both fine.
+                        if del_resp.status_code in (204, 404):
+                            killed += 1
+                    except Exception:  # noqa: BLE001 — best-effort
+                        pass
+                if killed:
+                    logger.warning(
+                        f"Owner reaper killed {killed} orphan e2b sandbox(es) "
+                        f"(owner_pid={_OWNER_PID}, "
+                        f"live_envs={len(live)})."
+                    )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — never crash the loop
+            logger.debug(f"Owner reaper iteration failed: {exc}")
+
+
+def _ensure_owner_reaper_started() -> None:
+    """Idempotently start the background owner reaper in the current event
+    loop. Called from every successful _create_sandbox so the first
+    successful sandbox kicks it off; subsequent calls are no-ops."""
+    global _OWNER_REAPER_TASK
+    if _OWNER_REAPER_TASK is not None and not _OWNER_REAPER_TASK.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _OWNER_REAPER_TASK = loop.create_task(_owner_reaper_loop())
+    _OWNER_REAPER_TASK.add_done_callback(_clear_reaper_task_on_done)
+
+
+def _clear_reaper_task_on_done(task: asyncio.Task[None]) -> None:
+    global _OWNER_REAPER_TASK
+    if _OWNER_REAPER_TASK is task:
+        _OWNER_REAPER_TASK = None
 
 # Backoff schedule (seconds) for retrying super().start() when the freshly-built
 # template's ``default`` tag is registered server-side but the underlying image
@@ -164,18 +291,84 @@ class SharedTemplateE2BEnvironment(E2BEnvironment):
             )
         return killed
 
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
     async def _create_sandbox(self) -> None:
-        """Wrap upstream sandbox.create so a mid-flight HTTP failure (the
-        SDK never returns a sandbox object even though e2b already started
-        provisioning one) doesn't leak a sandbox on the account quota.
+        """Override harbor's default to:
+          - Stamp ``owner_pid`` into sandbox metadata so the periodic owner
+            reaper can distinguish sandboxes this process created from those
+            created by other PGC processes sharing the same E2B account.
+          - Register the trial's ``environment_name`` in the process-wide
+            live set immediately after a successful create.
+          - Fire the existing zombie reaper on a mid-flight failure (a
+            5xx / dropped connection that the SDK couldn't retry through).
         """
+        metadata = {
+            "environment_name": self.environment_name,
+            "session_id": self.session_id,
+            "owner_pid": _OWNER_PID,
+        }
         try:
-            await super()._create_sandbox()
+            self._sandbox = await AsyncSandbox.create(
+                template=self._template_name,
+                metadata=metadata,
+                timeout=86_400,
+                allow_internet_access=self.task_env_config.allow_internet,
+            )
+            async with _get_live_lock():
+                _LIVE_ENVIRONMENT_NAMES.add(self.environment_name)
+            _ensure_owner_reaper_started()
         except Exception:
             # Re-raise after firing the reaper so the trial's retry logic
             # still gets to see the original exception.
             await self._reap_zombie_by_env_name()
             raise
+
+    async def stop(self, delete: bool) -> None:
+        """Augments harbor's ``stop()`` with two safety nets:
+          1. Always deregister our ``environment_name`` from the live set so
+             the owner reaper knows this trial is done (regardless of whether
+             the SDK kill succeeded).
+          2. Backup REST DELETE in case ``super().stop()`` caught an SDK
+             error and silently moved on, leaving the sandbox alive on e2b.
+        """
+        sandbox_id: str | None = None
+        if self._sandbox is not None:
+            sandbox_id = (
+                getattr(self._sandbox, "sandbox_id", None)
+                or getattr(self._sandbox, "sandboxID", None)
+            )
+        try:
+            await super().stop(delete)
+        finally:
+            async with _get_live_lock():
+                _LIVE_ENVIRONMENT_NAMES.discard(self.environment_name)
+            if sandbox_id:
+                await self._force_delete_via_rest(sandbox_id)
+
+    async def _force_delete_via_rest(self, sandbox_id: str) -> None:
+        """Direct REST DELETE that bypasses the SDK's retry/state. Idempotent
+        — a 404 (sandbox already gone) is treated as success. Best-effort:
+        never raises."""
+        api_key = os.environ.get("E2B_API_KEY")
+        if not api_key:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.delete(
+                    f"{_E2B_API_BASE}/sandboxes/{sandbox_id}",
+                    headers={"X-API-Key": api_key},
+                )
+                if resp.status_code not in (204, 404):
+                    logger.debug(
+                        f"Backup REST DELETE {sandbox_id} returned "
+                        f"{resp.status_code}; owner reaper will retry."
+                    )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.debug(f"Backup REST DELETE {sandbox_id} failed: {exc}")
 
     async def _create_template(self) -> None:
         """Always build from the public registry image, ignoring any

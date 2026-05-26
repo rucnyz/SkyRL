@@ -171,6 +171,21 @@ curl -sS -H "X-API-KEY: $E2B_API_KEY" https://api.e2b.app/sandboxes \
   zombie inflation pushed instantaneous count to 81+ multiple times. Stay
   ≤ 80 with the zombie reaper enabled, or refactor the reaper for tighter
   bookkeeping if you need to push higher.
+- **Sandbox leaks past harbor's stop()** — harbor's
+  ``E2BEnvironment.stop()`` catches any exception from ``self._sandbox.kill()``,
+  logs an ERROR, and proceeds to ``self._sandbox = None``. If the SDK kill
+  failed (transient e2b 5xx), the sandbox stays alive on the account quota
+  until e2b's own inactivity_timeout reaps it (observed: many hours).
+  Mitigation in ``SharedTemplateE2BEnvironment``:
+    1. A process-wide ``_LIVE_ENVIRONMENT_NAMES`` set tracks active trials.
+    2. ``_create_sandbox`` stamps ``owner_pid`` into metadata.
+    3. ``stop()`` always deregisters + fires a backup REST DELETE.
+    4. A background ``_owner_reaper_loop`` (60s interval) lists all e2b
+       sandboxes; any with our PID whose ``environment_name`` is not in the
+       live set gets DELETE'd. Foreign-PID and pre-fix (no-PID) sandboxes
+       are left alone, so concurrent runs on the same E2B account are safe.
+  See ``examples/train_integrations/harbor_pgc/tests/test_owner_reaper.py``
+  for the mock-based correctness tests.
 - **vLLM 2 engines is not enough for 64+ concurrent agents** — see "Why this
   layout" above. Symptom is no `result.json` getting written even though
   sandboxes look alive.
