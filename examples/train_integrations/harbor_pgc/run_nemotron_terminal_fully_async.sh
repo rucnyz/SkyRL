@@ -150,7 +150,7 @@ uv run --isolated --extra fsdp --extra harbor --with "harbor[e2b]" -m examples.t
   trainer.logger=wandb \
   trainer.project_name=harbor \
   trainer.run_name=$RUN_NAME \
-  trainer.resume_mode=none \
+  trainer.resume_mode=latest \
   generator.inference_engine.backend=vllm \
   generator.inference_engine.run_engines_locally=true \
   generator.inference_engine.weight_sync_backend=nccl \
