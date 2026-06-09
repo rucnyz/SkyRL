@@ -23,7 +23,9 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 #-----------------------
 # Dataset setup
 #-----------------------
-DATA_DIR="$(dirname "$0")/data"
+# Absolute path: relative paths resolve inside ray's packaged working_dir
+# copy, where data/ is not shipped ("Path does not exist" -> dataset size 0).
+DATA_DIR="$(cd "$(dirname "$0")" && pwd)/data"
 TRAIN_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks_smoke16']"
 EVAL_DATA="['$DATA_DIR/Nemotron-Terminal-Synthetic-Tasks_smoke16']"
 

@@ -23,6 +23,11 @@ trials_dir: ~/trials
 # Trial timeout multiplier (applied to default timeouts)
 timeout_multiplier: 1.0
 
+# Nemotron task.tomls set build_timeout_sec=600, tuned for prebuilt-image
+# pulls. nitrobox builds locally; a cold per-skill base build (apt + pip)
+# can exceed 600s. Cached rebuilds are seconds, so a generous cap is free.
+environment_build_timeout_multiplier: 5.0
+
 # Agent configuration
 # See: harbor.models.trial.config.AgentConfig
 agent:
