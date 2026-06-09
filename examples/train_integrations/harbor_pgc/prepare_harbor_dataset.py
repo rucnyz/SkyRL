@@ -99,6 +99,12 @@ def _extract_one(args: tuple) -> bool:
 
     try:
         _safe_extract_tar(bytes(data), target_dir)
+        # Some tasks reference `COPY files/ /app/` in their Dockerfile but ship
+        # an empty environment/files/ — tar archives drop empty dirs, breaking
+        # local builds (nitrobox/docker): "/files": not found. Recreate it.
+        env_dir = target_dir / "environment"
+        if (env_dir / "Dockerfile").exists():
+            (env_dir / "files").mkdir(exist_ok=True)
         return True
     except Exception as e:
         print(f"  Warning: Failed to extract {rel_path}: {e}")
