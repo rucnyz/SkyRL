@@ -75,12 +75,20 @@ agent:
       min_p: 0.0
 
 # Environment configuration
-# PGC variant: switched to e2b (cloud sandbox, $$ but reliable; we have credit
-# in research/pgc_swe/.env). Daytona/Modal also work — change type accordingly.
+# nitrobox variant: local namespace sandboxes (rucnyz/harbor fork), drop-in
+# Docker replacement — no cloud account/credit needed. The tasks' own
+# environment/Dockerfile (with COPY files/) is built locally; buildkit layer
+# caching shares the per-skill base layers across tasks.
 # See: harbor.models.trial.config.EnvironmentConfig
 environment:
-  # Environment type. Options: daytona, docker, e2b, modal, runloop, gke
-  type: e2b
+  # Environment type. Options: nitrobox, docker, daytona, e2b, modal, runloop, gke
+  type: nitrobox
+
+  # Nemotron task.tomls carry docker_image pointing at E2B-era prebuilt skill
+  # images that were built WITHOUT environment/files/ (E2B uploaded them via
+  # SDK at runtime). nitrobox must instead build the task Dockerfile locally
+  # so COPY files/ /app/ bakes the task inputs in — hence force_build.
+  force_build: true
 
   # Resource overrides (optional)
   override_cpus: 1
@@ -89,7 +97,7 @@ environment:
   suppress_override_warnings: true
 
   # Environment-specific settings
-  kwargs: {}  # e2b's AsyncSandbox.create takes no extra kwargs by default
+  kwargs: {}
 
 
 # Verifier configuration

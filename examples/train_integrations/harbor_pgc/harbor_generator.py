@@ -297,8 +297,12 @@ class HarborGenerator(GeneratorInterface):
         # alias, and per-task ``environment/files/`` get uploaded into /app/
         # at sandbox start (replaces the COPY files/ stripped from the
         # pre-built images). See environments/skyrl_e2b.py.
+        # Other environment types (e.g. nitrobox) resolve through harbor's
+        # built-in registry and run the task's own Dockerfile, so they need
+        # no import_path override.
         environment = self._harbor_trial_config_template.setdefault("environment", {})
-        environment["import_path"] = SKYRL_ENVIRONMENT_IMPORT_PATH
+        if environment.get("type") == "e2b":
+            environment["import_path"] = SKYRL_ENVIRONMENT_IMPORT_PATH
 
         # Step-wise needs per-turn token IDs and logprobs from vLLM via Harbor.
         agent_kwargs = self._harbor_trial_config_template["agent"]["kwargs"]
